@@ -8,9 +8,11 @@ from torch.cuda.amp.autocast_mode import autocast
 
 from TTS.tts.layers.feed_forward.decoder import Decoder
 from TTS.tts.layers.feed_forward.encoder import Encoder
-from TTS.tts.layers.generic.aligner import AlignmentNetwork
+#from TTS.tts.layers.generic.aligner import AlignmentNetwork
+from TTS.tts.layers.align_tts.mdn import MDNBlock #from align_tts
 from TTS.tts.layers.generic.pos_encoding import PositionalEncoding
-from TTS.tts.layers.glow_tts.duration_predictor import DurationPredictor
+from TTS.tts.layers.glow_tts.duration_predictor import DurationPredictor as GlowDurationPredictor
+from TTS.tts.layers.feed_forward.duration_predictor import DurationPredictor as FFDurationPredictor
 from TTS.tts.models.base_tts import BaseTTS
 from TTS.tts.utils.helpers import average_over_durations, generate_path, maximum_path, sequence_mask
 from TTS.tts.utils.speakers import SpeakerManager
@@ -20,7 +22,7 @@ from TTS.utils.io import load_fsspec
 
 
 @dataclass
-class ForwardTTSArgs(Coqpit):
+class FastAlignTTSArgs(Coqpit):
     """ForwardTTS Model arguments.
 
     Args:
@@ -127,7 +129,7 @@ class ForwardTTSArgs(Coqpit):
 
     num_chars: int = None
     out_channels: int = 80
-    hidden_channels: int = 384
+    hidden_channels: int = 256 #384
     use_aligner: bool = True
     # pitch params
     use_pitch: bool = True
@@ -168,8 +170,11 @@ class ForwardTTSArgs(Coqpit):
     d_vector_dim: int = None
     d_vector_file: str = None
 
+    #ssim loss?
+    use_ssim: bool = False
 
-class ForwardTTS(BaseTTS):
+
+class FastAlignTTS(BaseTTS):
     """General forward TTS model implementation that uses an encoder-decoder architecture with an optional alignment
     network and a pitch predictor.
 
@@ -240,15 +245,20 @@ class ForwardTTS(BaseTTS):
             self.args.decoder_params,
         )
 
-        self.duration_predictor = DurationPredictor(
-            self.args.hidden_channels + self.embedded_speaker_dim,
-            self.args.duration_predictor_hidden_channels,
-            self.args.duration_predictor_kernel_size,
-            self.args.duration_predictor_dropout_p,
-        )
+        #self.duration_predictor = DurationPredictor(
+        #    self.args.hidden_channels + self.embedded_speaker_dim,
+        #    self.args.duration_predictor_hidden_channels,
+        #    self.args.duration_predictor_kernel_size,
+        #    self.args.duration_predictor_dropout_p,
+        #)
 
+        self.duration_predictor = FFDurationPredictor(
+            #config.model_args.hidden_channels_dp
+            config.model_args.duration_predictor_hidden_channels
+            )
+       
         if self.args.use_pitch:
-            self.pitch_predictor = DurationPredictor(
+            self.pitch_predictor = GlowDurationPredictor(
                 self.args.hidden_channels + self.embedded_speaker_dim,
                 self.args.pitch_predictor_hidden_channels,
                 self.args.pitch_predictor_kernel_size,
@@ -262,7 +272,7 @@ class ForwardTTS(BaseTTS):
             )
 
         if self.args.use_energy:
-            self.energy_predictor = DurationPredictor(
+            self.energy_predictor = GlowDurationPredictor(
                 self.args.hidden_channels + self.embedded_speaker_dim,
                 self.args.energy_predictor_hidden_channels,
                 self.args.energy_predictor_kernel_size,
@@ -276,8 +286,12 @@ class ForwardTTS(BaseTTS):
             )
 
         if self.args.use_aligner:
-            self.aligner = AlignmentNetwork(
-                in_query_channels=self.args.out_channels, in_key_channels=self.args.hidden_channels
+            #self.aligner = AlignmentNetwork(
+            #    in_query_channels=self.args.out_channels, in_key_channels=self.args.hidden_channels
+            #)
+            self.mdn_block = MDNBlock(
+                config.model_args.hidden_channels, 
+                2 * config.model_args.out_channels
             )
 
     def init_multispeaker(self, config: Coqpit):
@@ -517,46 +531,34 @@ class ForwardTTS(BaseTTS):
         o_energy_emb = self.energy_emb(o_energy)
         return o_energy_emb, o_energy
 
-    def _forward_aligner(
-        self, x: torch.FloatTensor, y: torch.FloatTensor, x_mask: torch.IntTensor, y_mask: torch.IntTensor
-    ) -> Tuple[torch.IntTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        """Aligner forward pass.
+    @staticmethod
+    def compute_log_probs(mu, log_sigma, y):
+        # pylint: disable=protected-access, c-extension-no-member
+        y = y.transpose(1, 2).unsqueeze(1)  # [B, 1, T1, D]
+        mu = mu.transpose(1, 2).unsqueeze(2)  # [B, T2, 1, D]
+        log_sigma = log_sigma.transpose(1, 2).unsqueeze(2)  # [B, T2, 1, D]
+        expanded_y, expanded_mu = torch.broadcast_tensors(y, mu)
+        exponential = -0.5 * torch.mean(
+            torch._C._nn.mse_loss(expanded_y, expanded_mu, 0) / torch.pow(log_sigma.exp(), 2), dim=-1
+        )  # B, L, T
+        logp = exponential - 0.5 * log_sigma.mean(dim=-1)
+        return logp
 
-        1. Compute a mask to apply to the attention map.
-        2. Run the alignment network.
-        3. Apply MAS to compute the hard alignment map.
-        4. Compute the durations from the hard alignment map.
-
-        Args:
-            x (torch.FloatTensor): Input sequence.
-            y (torch.FloatTensor): Output sequence.
-            x_mask (torch.IntTensor): Input sequence mask.
-            y_mask (torch.IntTensor): Output sequence mask.
-
-        Returns:
-            Tuple[torch.IntTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-                Durations from the hard alignment map, soft alignment potentials, log scale alignment potentials,
-                hard alignment map.
-
-        Shapes:
-            - x: :math:`[B, T_en, C_en]`
-            - y: :math:`[B, T_de, C_de]`
-            - x_mask: :math:`[B, 1, T_en]`
-            - y_mask: :math:`[B, 1, T_de]`
-
-            - o_alignment_dur: :math:`[B, T_en]`
-            - alignment_soft: :math:`[B, T_en, T_de]`
-            - alignment_logprob: :math:`[B, 1, T_de, T_en]`
-            - alignment_mas: :math:`[B, T_en, T_de]`
-        """
+    def compute_align_path(self, mu, log_sigma, y, x_mask, y_mask):
+        # find the max alignment path
         attn_mask = torch.unsqueeze(x_mask, -1) * torch.unsqueeze(y_mask, 2)
-        alignment_soft, alignment_logprob = self.aligner(y.transpose(1, 2), x.transpose(1, 2), x_mask, None)
-        alignment_mas = maximum_path(
-            alignment_soft.squeeze(1).transpose(1, 2).contiguous(), attn_mask.squeeze(1).contiguous()
-        )
-        o_alignment_dur = torch.sum(alignment_mas, -1).int()
-        alignment_soft = alignment_soft.squeeze(1).transpose(1, 2)
-        return o_alignment_dur, alignment_soft, alignment_logprob, alignment_mas
+        log_p = self.compute_log_probs(mu, log_sigma, y)
+        # [B, T_en, T_dec]
+        attn = maximum_path(log_p, attn_mask.squeeze(1)).unsqueeze(1)
+        dr_mas = torch.sum(attn, -1)
+        return dr_mas.squeeze(1), log_p
+
+    def _forward_mdn(self, o_en, y, y_lengths, x_mask):
+        # MAS potentials and alignment
+        mu, log_sigma = self.mdn_block(o_en)
+        y_mask = torch.unsqueeze(sequence_mask(y_lengths, None), 1).to(o_en.dtype)
+        dr_mas, logp = self.compute_align_path(mu, log_sigma, y, x_mask, y_mask)
+        return dr_mas, mu, log_sigma, logp
 
     def _set_speaker_input(self, aux_input: Dict):
         d_vectors = aux_input.get("d_vectors", None)
@@ -623,23 +625,24 @@ class ForwardTTS(BaseTTS):
         alignment_logprob = None
         alignment_mas = None
         if self.use_aligner:
-            o_alignment_dur, alignment_soft, alignment_logprob, alignment_mas = self._forward_aligner(
-                x_emb, y, x_mask, y_mask
-            )
-            alignment_soft = alignment_soft.transpose(1, 2)
-            alignment_mas = alignment_mas.transpose(1, 2)
-            dr = o_alignment_dur
+            dr_mas, mu, log_sigma, logp = self._forward_mdn(o_en, y.transpose(1, 2), y_lengths, x_mask)
+            #o_alignment_dur, alignment_soft, alignment_logprob, alignment_mas = self._forward_aligner(
+            #    x_emb, y, x_mask, y_mask
+            #)
+            #alignment_soft = alignment_soft.transpose(1, 2)
+            #alignment_mas = alignment_mas.transpose(1, 2)
+            #dr = o_alignment_dur
         # pitch predictor pass
         o_pitch = None
         avg_pitch = None
         if self.args.use_pitch:
-            o_pitch_emb, o_pitch, avg_pitch = self._forward_pitch_predictor(o_en, x_mask, pitch, dr)
+            o_pitch_emb, o_pitch, avg_pitch = self._forward_pitch_predictor(o_en, x_mask, pitch, dr_mas)
             #o_en = o_en + o_pitch_emb
         # energy predictor pass
         o_energy = None
         avg_energy = None
         if self.args.use_energy:
-            o_energy_emb, o_energy, avg_energy = self._forward_energy_predictor(o_en, x_mask, energy, dr)
+            o_energy_emb, o_energy, avg_energy = self._forward_energy_predictor(o_en, x_mask, energy, dr_mas)
             #o_en_var = o_en + o_energy_emb
         #if pitch of energy was used, we add the results to o_en
         if self.args.use_pitch : o_en=o_en+o_pitch_emb
@@ -647,7 +650,7 @@ class ForwardTTS(BaseTTS):
 
         # decoder pass
         o_de, attn = self._forward_decoder(
-            o_en, dr, x_mask, y_lengths, g=None
+            o_en, dr_mas, x_mask, y_lengths, g=None
         )  # TODO: maybe pass speaker embedding (g) too
         outputs = {
             "model_outputs": o_de,  # [B, T, C]
@@ -659,10 +662,11 @@ class ForwardTTS(BaseTTS):
             "energy_avg": o_energy,
             "energy_avg_gt": avg_energy,
             "alignments": attn,  # [B, T_de, T_en]
-            "alignment_soft": alignment_soft,
-            "alignment_mas": alignment_mas,
-            "o_alignment_dur": o_alignment_dur,
-            "alignment_logprob": alignment_logprob,
+            #"alignment_soft": alignment_soft,
+            "alignment_mas": dr_mas, #alignment_mas,
+            #"o_alignment_dur": torch.sum(dr_mas, -1).int(), #o_alignment_dur,
+            "o_alignment_dur": dr_mas,
+            "alignment_logprob": logp, #alignment_logprob,
             "x_mask": x_mask,
             "y_mask": y_mask,
         }
@@ -752,7 +756,7 @@ class ForwardTTS(BaseTTS):
                 energy_target=outputs["energy_avg_gt"] if self.use_energy else None,
                 input_lens=text_lengths,
                 alignment_logprob=outputs["alignment_logprob"] if self.use_aligner else None,
-                alignment_soft=outputs["alignment_soft"],
+                #alignment_soft=outputs["alignment_soft"],
                 alignment_hard=outputs["alignment_mas"],
                 binary_loss_weight=self.binary_loss_weight,
             )
@@ -835,16 +839,16 @@ class ForwardTTS(BaseTTS):
             assert not self.training
 
     def get_criterion(self):
-        from TTS.tts.layers.losses import ForwardTTSLoss  # pylint: disable=import-outside-toplevel
+        from TTS.tts.layers.losses import FastAlignTTSLoss  # pylint: disable=import-outside-toplevel
 
-        return ForwardTTSLoss(self.config)
+        return FastAlignTTSLoss(self.config)
 
-    def on_train_step_start(self, trainer):
-        """Schedule binary loss weight."""
-        self.binary_loss_weight = min(trainer.epochs_done / self.config.binary_loss_warmup_epochs, 1.0) * 1.0
+    #def on_train_step_start(self, trainer):
+    #    """Schedule binary loss weight."""
+    #    self.binary_loss_weight = min(trainer.epochs_done / self.config.binary_loss_warmup_epochs, 1.0) * 1.0
 
     @staticmethod
-    def init_from_config(config: "ForwardTTSConfig", samples: Union[List[List], List[Dict]] = None):
+    def init_from_config(config: "FastAlignConfig", samples: Union[List[List], List[Dict]] = None):
         """Initiate model from config
 
         Args:
@@ -857,4 +861,4 @@ class ForwardTTS(BaseTTS):
         ap = AudioProcessor.init_from_config(config)
         tokenizer, new_config = TTSTokenizer.init_from_config(config)
         speaker_manager = SpeakerManager.init_from_config(config, samples)
-        return ForwardTTS(new_config, ap, tokenizer, speaker_manager)
+        return FastAlignTTS(new_config, ap, tokenizer, speaker_manager)
