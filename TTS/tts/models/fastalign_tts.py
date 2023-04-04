@@ -161,7 +161,7 @@ class FastAlignTTSArgs(Coqpit):
     decoder_params: dict = field(
         default_factory=lambda: {"hidden_channels_ffn": 1024, "num_heads": 1, "num_layers": 6, "dropout_p": 0.1}
     )
-    detach_duration_predictor: bool = False
+    detach_duration_predictor: bool = True
     max_duration: int = 75
     num_speakers: int = 1
     use_speaker_embedding: bool = False
@@ -418,10 +418,11 @@ class FastAlignTTS(BaseTTS):
         # encoder pass
         o_en = self.encoder(torch.transpose(x_emb, 1, -1), x_mask)
         # speaker conditioning
+        o_en_nospeaker=o_en
         # TODO: try different ways of conditioning
         if g is not None:
             o_en = o_en + g
-        return o_en, x_mask, g, x_emb
+        return o_en,o_en_nospeaker, x_mask, g, x_emb
 
     def _forward_decoder(
         self,
@@ -610,7 +611,7 @@ class FastAlignTTS(BaseTTS):
         y_mask = torch.unsqueeze(sequence_mask(y_lengths, None), 1).float()
         x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.shape[1]), 1).float()
         # encoder pass
-        o_en, x_mask, g, x_emb = self._forward_encoder(x, x_mask, g)
+        o_en,o_en_nospeaker, x_mask, g, x_emb = self._forward_encoder(x, x_mask, g)
         # duration predictor pass
         if self.args.detach_duration_predictor:
             o_dr_log = self.duration_predictor(o_en.detach(), x_mask)
@@ -625,7 +626,7 @@ class FastAlignTTS(BaseTTS):
         alignment_logprob = None
         alignment_mas = None
         if self.use_aligner:
-            dr_mas, mu, log_sigma, logp = self._forward_mdn(o_en, y.transpose(1, 2), y_lengths, x_mask)
+            dr_mas, mu, log_sigma, logp = self._forward_mdn(o_en_nospeaker, y.transpose(1, 2), y_lengths, x_mask)
             dr_mas_log = torch.log(dr_mas + 1).squeeze(1)
             #o_alignment_dur, alignment_soft, alignment_logprob, alignment_mas = self._forward_aligner(
             #    x_emb, y, x_mask, y_mask
