@@ -973,7 +973,7 @@ class FastAlignTTSLoss(nn.Module):
         if hasattr(self, "dur_loss") and self.dur_loss_alpha > 0:
             dur_loss = self.dur_loss(dur_output.unsqueeze(2), dur_target.unsqueeze(2), input_lens)
             loss = loss + self.dur_loss_alpha * dur_loss
-            return_dict["dur_loss"] = self.dur_loss_alpha * dur_loss
+            return_dict["loss_dur"] = self.dur_loss_alpha * dur_loss
 
         return_dict["loss"] = loss
         return return_dict

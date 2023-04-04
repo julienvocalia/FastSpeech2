@@ -140,7 +140,7 @@ class FastAlignConfig(BaseTTSConfig):
     #aligner_loss_alpha: float = 1.0
     pitch_loss_alpha: float = 0.1
     energy_loss_alpha: float = 0.1
-    dur_loss_alpha: float = 0.1
+    dur_loss_alpha: float = 1.0 #0.1
     #binary_align_loss_alpha: float = 0.1
     #binary_loss_warmup_epochs: int = 150
     use_mdn_loss: bool = True

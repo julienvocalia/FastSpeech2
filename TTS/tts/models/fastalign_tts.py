@@ -626,6 +626,7 @@ class FastAlignTTS(BaseTTS):
         alignment_mas = None
         if self.use_aligner:
             dr_mas, mu, log_sigma, logp = self._forward_mdn(o_en, y.transpose(1, 2), y_lengths, x_mask)
+            dr_mas_log = torch.log(dr_mas + 1).squeeze(1)
             #o_alignment_dur, alignment_soft, alignment_logprob, alignment_mas = self._forward_aligner(
             #    x_emb, y, x_mask, y_mask
             #)
@@ -669,6 +670,7 @@ class FastAlignTTS(BaseTTS):
             "alignment_logprob": logp, #alignment_logprob,
             "x_mask": x_mask,
             "y_mask": y_mask,
+            "durations_mas_log": dr_mas_log,
         }
         return outputs
 
@@ -749,7 +751,8 @@ class FastAlignTTS(BaseTTS):
                 decoder_target=mel_input,
                 decoder_output_lens=mel_lengths,
                 dur_output=outputs["durations_log"],
-                dur_target=durations,
+                #dur_target=durations,
+                dur_target=outputs["durations_mas_log"],
                 pitch_output=outputs["pitch_avg"] if self.use_pitch else None,
                 pitch_target=outputs["pitch_avg_gt"] if self.use_pitch else None,
                 energy_output=outputs["energy_avg"] if self.use_energy else None,
