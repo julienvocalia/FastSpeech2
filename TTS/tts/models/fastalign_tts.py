@@ -692,7 +692,7 @@ class FastAlignTTS(BaseTTS):
         x_lengths = torch.tensor(x.shape[1:2]).to(x.device)
         x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.shape[1]), 1).to(x.dtype).float()
         # encoder pass
-        o_en, x_mask, g, _ = self._forward_encoder(x, x_mask, g)
+        o_en, _, x_mask, g, _ = self._forward_encoder(x, x_mask, g)
         # duration predictor pass
         o_dr_log = self.duration_predictor(o_en, x_mask)
         o_dr = self.format_durations(o_dr_log, x_mask).squeeze(1)
@@ -701,12 +701,15 @@ class FastAlignTTS(BaseTTS):
         o_pitch = None
         if self.args.use_pitch:
             o_pitch_emb, o_pitch = self._forward_pitch_predictor(o_en, x_mask)
-            o_en = o_en + o_pitch_emb
+            #o_en = o_en + o_pitch_emb
         # energy predictor pass
         o_energy = None
         if self.args.use_energy:
             o_energy_emb, o_energy = self._forward_energy_predictor(o_en, x_mask)
-            o_en = o_en + o_energy_emb
+            #o_en = o_en + o_energy_emb
+        #if pitch of energy was used, we add the results to o_en
+        if self.args.use_pitch : o_en=o_en+o_pitch_emb
+        if self.args.use_energy : o_en=o_en+o_energy_emb
         # decoder pass
         o_de, attn = self._forward_decoder(o_en, o_dr, x_mask, y_lengths, g=None)
         outputs = {
