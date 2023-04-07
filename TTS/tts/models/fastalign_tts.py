@@ -174,7 +174,7 @@ class FastAlignTTSArgs(Coqpit):
     use_ssim: bool = False
 
 
-class FastAlignTTS(BaseTTS):
+class FastalignTTS(BaseTTS):
     """General forward TTS model implementation that uses an encoder-decoder architecture with an optional alignment
     network and a pitch predictor.
 
@@ -868,4 +868,4 @@ class FastAlignTTS(BaseTTS):
         ap = AudioProcessor.init_from_config(config)
         tokenizer, new_config = TTSTokenizer.init_from_config(config)
         speaker_manager = SpeakerManager.init_from_config(config, samples)
-        return FastAlignTTS(new_config, ap, tokenizer, speaker_manager)
+        return FastalignTTS(new_config, ap, tokenizer, speaker_manager)

@@ -7,7 +7,7 @@ from TTS.tts.models.align_tts import AlignTTSArgs
 
 
 @dataclass
-class FastAlignConfig(BaseTTSConfig):
+class FastalignConfig(BaseTTSConfig):
     """Configure `ForwardTTS` as FastPitch model.
 
     Example:
