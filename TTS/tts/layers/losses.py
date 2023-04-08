@@ -977,3 +977,105 @@ class FastAlignTTSLoss(nn.Module):
 
         return_dict["loss"] = loss
         return return_dict
+    
+class FAHTTSLoss(nn.Module):
+    """ForwardTTS loss, with a spin to include align mdn and duration blocks, and hifigan vocoder."""
+
+    def __init__(self, c):
+        super().__init__()
+
+        if c.spec_loss_type == "mse":
+            self.spec_loss = MSELossMasked(False)
+        elif c.spec_loss_type == "l1":
+            self.spec_loss = L1LossMasked(False)
+        else:
+            raise ValueError(" [!] Unknown spec_loss_type {}".format(c.spec_loss_type))
+
+        if c.duration_loss_type == "mse":
+            self.dur_loss = MSELossMasked(False)
+        elif c.duration_loss_type == "l1":
+            self.dur_loss = L1LossMasked(False)
+        elif c.duration_loss_type == "huber":
+            self.dur_loss = Huber()
+        else:
+            raise ValueError(" [!] Unknown duration_loss_type {}".format(c.duration_loss_type))
+        self.dur_loss_alpha = c.dur_loss_alpha
+
+
+        if c.model_args.use_pitch:
+            self.pitch_loss = MSELossMasked(False)
+            self.pitch_loss_alpha = c.pitch_loss_alpha
+
+        if c.model_args.use_energy:
+            self.energy_loss = MSELossMasked(False)
+            self.energy_loss_alpha = c.energy_loss_alpha
+
+        if c.use_ssim_loss:
+            self.ssim_loss = SSIMLoss() if c.use_ssim_loss else None
+            self.ssim_loss_alpha = c.ssim_loss_alpha
+
+
+        if c.use_mdn_loss:
+            self.mdn_loss_alpha = c.mdn_loss_alpha
+            self.mdn_loss = MDNLoss()
+
+        #VITS parameters
+        self.gen_loss_alpha = c.gen_loss_alpha
+        self.feat_loss_alpha = c.feat_loss_alpha
+        self.mel_loss_alpha = c.mel_loss_alpha
+
+
+    def forward(
+        self,
+        mel_lens_target,
+        mel_slice,
+        mel_slice_hat,
+        dur_output,
+        dur_target,
+        pitch_output,
+        pitch_target,
+        energy_output,
+        energy_target,
+        input_lens,
+        alignment_logprob,
+        feats_disc_real,
+        feats_disc_fake,
+        scores_disc_fake,
+        
+
+
+    ):
+        loss = 0
+        return_dict = {}
+
+        if hasattr(self, "pitch_loss") and self.pitch_loss_alpha > 0:
+            pitch_loss = self.pitch_loss(pitch_output.transpose(1, 2), pitch_target.transpose(1, 2), input_lens)
+            loss = loss + self.pitch_loss_alpha * pitch_loss
+            return_dict["loss_pitch"] = self.pitch_loss_alpha * pitch_loss
+
+        if hasattr(self, "energy_loss") and self.energy_loss_alpha > 0:
+            energy_loss = self.energy_loss(energy_output.transpose(1, 2), energy_target.transpose(1, 2), input_lens)
+            loss = loss + self.energy_loss_alpha * energy_loss
+            return_dict["loss_energy"] = self.energy_loss_alpha * energy_loss
+
+        if hasattr(self, "mdn_loss") and self.mdn_loss_alpha > 0:
+            mdn_loss = self.mdn_loss(alignment_logprob, input_lens, mel_lens_target)
+            loss = loss + self.mdn_loss_alpha * mdn_loss
+            return_dict["mdn_loss"] = self.mdn_loss_alpha * mdn_loss
+
+        if hasattr(self, "dur_loss") and self.dur_loss_alpha > 0:
+            dur_loss = self.dur_loss(dur_output.unsqueeze(2), dur_target.unsqueeze(2), input_lens)
+            loss = loss + self.dur_loss_alpha * dur_loss
+            return_dict["loss_dur"] = self.dur_loss_alpha * dur_loss
+
+        #VITS losses
+        loss_feat = VitsGeneratorLoss.feature_loss(feats_real=feats_disc_real, feats_generated=feats_disc_fake) * self.feat_loss_alpha
+        return_dict["loss_feat"]=loss_feat
+        loss_gen=VitsGeneratorLoss.generator_loss(scores_fake=scores_disc_fake)[0] * self.gen_loss_alpha
+        return_dict["loss_gen"]=loss_gen
+        loss_mel = torch.nn.functional.l1_loss(mel_slice, mel_slice_hat) * self.mel_loss_alpha
+        return_dict["loss_mel"]=loss_mel
+        loss=loss + loss_feat + loss_gen + loss_mel
+
+        return_dict["loss"] = loss
+        return return_dict
