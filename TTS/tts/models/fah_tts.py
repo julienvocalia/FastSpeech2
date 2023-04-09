@@ -25,7 +25,14 @@ from TTS.tts.layers.vits.discriminator import VitsDiscriminator #from VITS
 from TTS.vocoder.models.hifigan_generator import HifiganGenerator #from HigiGan Vocoder
 from trainer.trainer_utils import get_optimizer, get_scheduler #from VITS
 from TTS.tts.models.vits import wav_to_mel #from VITS
+from TTS.vocoder.utils.generic_utils import plot_results #from VITS
+from TTS.tts.utils.synthesis import synthesis #from VITS
 
+##########################################
+# IO / Feature extraction for VITS part  #
+##########################################
+
+# pylint: disable=global-statement
 hann_window = {}
 mel_basis = {}
 from librosa.filters import mel as librosa_mel_fn
@@ -827,7 +834,7 @@ class FahTTS(BaseTTS):
         x_lengths = torch.tensor(x.shape[1:2]).to(x.device)
         x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.shape[1]), 1).to(x.dtype).float()
         # encoder pass
-        o_en, _, x_mask, g, _ = self._forward_encoder(x, x_mask, g)
+        o_en, _, x_mask, _ = self._forward_encoder(x, x_mask, g)
         # duration predictor pass
         o_dr_log = self.duration_predictor(o_en, x_mask)
         o_dr = self.format_durations(o_dr_log, x_mask).squeeze(1)
@@ -1027,24 +1034,40 @@ class FahTTS(BaseTTS):
     
     def _create_logs(self, batch, outputs, ap):
         """Create common logger outputs."""
-        model_outputs = outputs["model_outputs"]
-        alignments = outputs["alignments"]
-        mel_input = batch["mel_input"]
+        
+        #adding VITS logs
+        y_hat = outputs[1]["model_outputs"]
+        y = outputs[1]["waveform_seg"]
+        figures = plot_results(y_hat, y, ap)
+        sample_voice = y_hat[0].squeeze(0).detach().cpu().numpy()
+        #train_audio = {"audio": sample_voice}
 
-        pred_spec = model_outputs[0].data.cpu().numpy()
-        gt_spec = mel_input[0].data.cpu().numpy()
-        align_img = alignments[0].data.cpu().numpy()
+        alignments = outputs[1]["alignments"]
+        align_img = alignments[0].data.cpu().numpy().T
+        figures.update(
+            {
+                "alignment": plot_alignment(align_img, output_fig=False),
+            }
+        )
 
-        figures = {
-            "prediction": plot_spectrogram(pred_spec, ap, output_fig=False),
-            "ground_truth": plot_spectrogram(gt_spec, ap, output_fig=False),
-            "alignment": plot_alignment(align_img, output_fig=False),
-        }
+        #model_outputs = outputs["model_outputs"]
+        #alignments = outputs["alignments"]
+        #mel_input = batch["mel_input"]
+
+        #pred_spec = model_outputs[0].data.cpu().numpy()
+        #gt_spec = mel_input[0].data.cpu().numpy()
+        #align_img = alignments[0].data.cpu().numpy()
+
+        #figures.update = {
+        #    "prediction": plot_spectrogram(pred_spec, ap, output_fig=False),
+        #    "ground_truth": plot_spectrogram(gt_spec, ap, output_fig=False),
+        #    "alignment": plot_alignment(align_img, output_fig=False),
+        #}
 
         # plot pitch figures
         if self.args.use_pitch:
-            pitch_avg = abs(outputs["pitch_avg_gt"][0, 0].data.cpu().numpy())
-            pitch_avg_hat = abs(outputs["pitch_avg"][0, 0].data.cpu().numpy())
+            pitch_avg = abs(outputs[1]["pitch_avg_gt"][0, 0].data.cpu().numpy())
+            pitch_avg_hat = abs(outputs[1]["pitch_avg"][0, 0].data.cpu().numpy())
             chars = self.tokenizer.decode(batch["text_input"][0].data.cpu().numpy())
             pitch_figures = {
                 "pitch_ground_truth": plot_avg_pitch(pitch_avg, chars, output_fig=False),
@@ -1054,8 +1077,8 @@ class FahTTS(BaseTTS):
 
         # plot energy figures
         if self.args.use_energy:
-            energy_avg = abs(outputs["energy_avg_gt"][0, 0].data.cpu().numpy())
-            energy_avg_hat = abs(outputs["energy_avg"][0, 0].data.cpu().numpy())
+            energy_avg = abs(outputs[1]["energy_avg_gt"][0, 0].data.cpu().numpy())
+            energy_avg_hat = abs(outputs[1]["energy_avg"][0, 0].data.cpu().numpy())
             chars = self.tokenizer.decode(batch["text_input"][0].data.cpu().numpy())
             energy_figures = {
                 "energy_ground_truth": plot_avg_energy(energy_avg, chars, output_fig=False),
@@ -1065,12 +1088,14 @@ class FahTTS(BaseTTS):
 
         # plot the attention mask computed from the predicted durations
         if "attn_durations" in outputs:
-            alignments_hat = outputs["attn_durations"][0].data.cpu().numpy()
+            alignments_hat = outputs[1]["attn_durations"][0].data.cpu().numpy()
             figures["alignment_hat"] = plot_alignment(alignments_hat.T, output_fig=False)
 
         # Sample audio
-        train_audio = ap.inv_melspectrogram(pred_spec.T)
-        return figures, {"audio": train_audio}
+        #train_audio = ap.inv_melspectrogram(pred_spec.T)
+        #return figures, {"audio": train_audio}
+    
+        return figures, {"audio": sample_voice}
 
     def train_log(
         self, batch: dict, outputs: dict, logger: "Logger", assets: dict, steps: int
@@ -1079,13 +1104,95 @@ class FahTTS(BaseTTS):
         logger.train_figures(steps, figures)
         logger.train_audios(steps, audios, self.ap.sample_rate)
 
-    def eval_step(self, batch: dict, criterion: nn.Module):
-        return self.train_step(batch, criterion)
+    @torch.no_grad()
+    def eval_step(self, batch: dict, criterion: nn.Module, optimizer_idx: int):
+        return self.train_step(batch, criterion, optimizer_idx)
 
     def eval_log(self, batch: dict, outputs: dict, logger: "Logger", assets: dict, steps: int) -> None:
         figures, audios = self._create_logs(batch, outputs, self.ap)
         logger.eval_figures(steps, figures)
         logger.eval_audios(steps, audios, self.ap.sample_rate)
+
+    #Addition for VITS
+    def get_aux_input_from_test_sentences(self, sentence_info):
+        if hasattr(self.config, "model_args"):
+            config = self.config.model_args
+        else:
+            config = self.config
+
+        # extract speaker and language info
+        text, speaker_name, style_wav, language_name = None, None, None, None
+
+        if isinstance(sentence_info, list):
+            if len(sentence_info) == 1:
+                text = sentence_info[0]
+            elif len(sentence_info) == 2:
+                text, speaker_name = sentence_info
+            elif len(sentence_info) == 3:
+                text, speaker_name, style_wav = sentence_info
+            elif len(sentence_info) == 4:
+                text, speaker_name, style_wav, language_name = sentence_info
+        else:
+            text = sentence_info
+
+        # get speaker  id/d_vector
+        speaker_id, d_vector, language_id = None, None, None
+        if hasattr(self, "speaker_manager"):
+            if config.use_d_vector_file:
+                if speaker_name is None:
+                    d_vector = self.speaker_manager.get_random_embedding()
+                else:
+                    d_vector = self.speaker_manager.get_mean_embedding(speaker_name, num_samples=None, randomize=False)
+            elif config.use_speaker_embedding:
+                if speaker_name is None:
+                    speaker_id = self.speaker_manager.get_random_id()
+                else:
+                    speaker_id = self.speaker_manager.name_to_id[speaker_name]
+
+        # get language id
+        if hasattr(self, "language_manager") and hasattr(config, 'use_language_embedding') and config.use_language_embedding and language_name is not None:
+            language_id = self.language_manager.name_to_id[language_name]
+
+        return {
+            "text": text,
+            "speaker_id": speaker_id,
+            "style_wav": style_wav,
+            "d_vector": d_vector,
+            "language_id": language_id,
+            "language_name": language_name,
+        }
+    
+    #Addition for VITS
+    @torch.no_grad()
+    def test_run(self, assets) -> Tuple[Dict, Dict]:
+        """Generic test run for `tts` models used by `Trainer`.
+
+        You can override this for a different behaviour.
+
+        Returns:
+            Tuple[Dict, Dict]: Test figures and audios to be projected to Tensorboard.
+        """
+        print(" | > Synthesizing test sentences.")
+        test_audios = {}
+        test_figures = {}
+        test_sentences = self.config.test_sentences
+        for idx, s_info in enumerate(test_sentences):
+            aux_inputs = self.get_aux_input_from_test_sentences(s_info)
+            wav, alignment, _, _ = synthesis(
+                self,
+                aux_inputs["text"],
+                self.config,
+                "cuda" in str(next(self.parameters()).device),
+                speaker_id=aux_inputs["speaker_id"],
+                d_vector=aux_inputs["d_vector"],
+                style_wav=aux_inputs["style_wav"],
+                language_id=aux_inputs["language_id"],
+                use_griffin_lim=True,
+                do_trim_silence=False,
+            ).values()
+            test_audios["{}-audio".format(idx)] = wav
+            test_figures["{}-alignment".format(idx)] = plot_alignment(alignment.T, output_fig=False)
+        return {"figures": test_figures, "audios": test_audios}
 
     #from VITS
     def get_optimizer(self) -> List:
