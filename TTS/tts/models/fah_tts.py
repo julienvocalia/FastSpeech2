@@ -689,6 +689,12 @@ class FahTTS(BaseTTS):
         return g
     
 
+    #to fix padding with zeros and log operations
+    def _remove_inf(t: torch.Tensor):
+        mask=torch.isinf(t)
+        t[mask]=0
+        return t
+
     def forward(
         self,
         x: torch.LongTensor,
@@ -724,20 +730,31 @@ class FahTTS(BaseTTS):
         """
         #we proper compute the embedding of g 
         g=self._forward_speaker_embedding(aux_input)
+        g=self._remove_inf(g)
+
+
 
         # compute sequence masks
         y_mask = torch.unsqueeze(sequence_mask(y_lengths, None), 1).float()
+        y_mask=self._remove_inf(y_mask)
         x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.shape[1]), 1).float()
+        x_mask=self._remove_inf(x_mask)
         # encoder pass
         o_en,o_en_nospeaker, x_mask, _ = self._forward_encoder(x, x_mask, g)
+        o_en=self._remove_inf(o_en)
+        o_en_nospeaker=self._remove_inf(o_en_nospeaker)
+        x_mask=self._remove_inf(x_mask)
         # duration predictor pass
         if self.args.detach_duration_predictor:
             o_dr_log = self.duration_predictor(o_en.detach(), x_mask)
         else:
             o_dr_log = self.duration_predictor(o_en, x_mask)
+        o_dr_log=self._remove_inf(o_dr_log)
         o_dr = torch.clamp(torch.exp(o_dr_log) - 1, 0, self.max_duration)
+        o_dr=self._remove_inf(o_dr)
         # generate attn mask from predicted durations
         o_attn = self.generate_attn(o_dr.squeeze(1), x_mask)
+        o_attn=self._remove_inf(o_attn)
         # aligner
         o_alignment_dur = None
         alignment_soft = None
@@ -745,7 +762,9 @@ class FahTTS(BaseTTS):
         alignment_mas = None
         if self.use_aligner:
             dr_mas, mu, log_sigma, logp = self._forward_mdn(o_en_nospeaker, y.transpose(1, 2), y_lengths, x_mask)
+            dr_mas=self._remove_inf(dr_mas)
             dr_mas_log = torch.log(dr_mas + 1).squeeze(1)
+            dr_mas_log=self._remove_inf(dr_mas_log)
             #o_alignment_dur, alignment_soft, alignment_logprob, alignment_mas = self._forward_aligner(
             #    x_emb, y, x_mask, y_mask
             #)
@@ -770,14 +789,19 @@ class FahTTS(BaseTTS):
 
         #we use here what was previously computed in _forward_decoder
         y_mask = torch.unsqueeze(sequence_mask(y_lengths, None), 1).to(o_en.dtype)
+        y_mask=self._remove_inf(y_mask)
         # expand o_en with durations
         o_en_ex, attn = self.expand_encoder_outputs(o_en, dr_mas, x_mask, y_mask)
+        o_en_ex=self._remove_inf(o_en_ex)
+        attn=self._remove_inf(attn)
         # positional encoding
         if hasattr(self, "pos_encoder"):
             o_en_ex = self.pos_encoder(o_en_ex, y_mask)
+            o_en_ex=self._remove_inf(o_en_ex)
 
         # select a random feature segment for the waveform decoder
         z_slice, slice_ids = rand_segments(o_en_ex, y_lengths, self.spec_segment_size, let_short_samples=True, pad_short=True)
+        z_slice=self._remove_inf(z_slice)
 
         #wav decoder pass
         o_wav = self.waveform_decoder(z_slice, g=g)

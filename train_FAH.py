@@ -19,6 +19,10 @@ dataset_config = [
     BaseDatasetConfig(formatter="mailabs", meta_file_train=None, path="/home/datasets/split_datasets_16khz/mailabs_blizzard/", language="fr_FR"),
     BaseDatasetConfig(formatter="mailabs", meta_file_train=None, path="/home/datasets/split_datasets_16khz/mailabs_comvoice/", language="fr_FR"),
     BaseDatasetConfig(formatter="mailabs", meta_file_train=None, path="/home/datasets/split_datasets_16khz/mailabs_sympflex/", language="fr_FR"),
+    BaseDatasetConfig(formatter="mailabs", meta_file_train=None, path="/home/datasets/dataset_ezwa_16khz/", language="fr_FR"),
+    BaseDatasetConfig(formatter="mailabs", meta_file_train=None, path="/home/datasets/dataset_bunny_16khz/", language="fr_FR"),
+    BaseDatasetConfig(formatter="mailabs", meta_file_train=None, path="/home/datasets/dataset_nadine_16khz/", language="fr_FR"),
+    BaseDatasetConfig(formatter="mailabs", meta_file_train=None, path="/home/datasets/dataset_bernard_16khz/", language="fr_FR"),
 ]
 
 audio_config = BaseAudioConfig(
@@ -73,7 +77,7 @@ config = FahConfig(
     text_cleaner="multilingual_cleaners",
     use_phonemes=True,
     phoneme_language="fr-fr",
-    phoneme_cache_path="/home/cache/phonem/temp_cache/",
+    phoneme_cache_path="/home/cache/phonem/16khz_full_espeakng_updated/",
     compute_input_seq_cache=True,
     print_step=100,
     save_step=100000,
@@ -85,9 +89,9 @@ config = FahConfig(
     min_seq_len=3,
     max_seq_len=500000,
     compute_f0=True,
-    f0_cache_path="/home/cache/f0/temp_cache/",
+    f0_cache_path="/home/cache/f0/16khz_mailabs_trim45/",
     compute_energy=True,
-    energy_cache_path="/home/cache/energy/temp_cache/",
+    energy_cache_path="/home/cache/energy/16khz_mailabs_trim45/",
     output_path=output_path,
     datasets=dataset_config,
     test_sentences=["Il m'a fallu beaucoup de temps pour d\u00e9velopper une voix, et maintenant que je l'ai, je ne vais pas me taire.","Les sanglots longs des vilons de l'automne, blessent mon coeur d'une langueur monotone. Tout suffocant et blème quand sonne l'heure, je me souviens des jours anciens, et je pleure."]
