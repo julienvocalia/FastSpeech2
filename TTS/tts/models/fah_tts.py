@@ -690,7 +690,7 @@ class FahTTS(BaseTTS):
     
 
     #to fix padding with zeros and log operations
-    def _remove_inf(t: torch.Tensor):
+    def _remove_inf(self,t: torch.Tensor):
         mask=torch.isinf(t)
         t[mask]=0
         return t
