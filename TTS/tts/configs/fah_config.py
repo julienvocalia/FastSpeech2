@@ -84,21 +84,9 @@ class FahConfig(BaseTTSConfig):
             Minimum input sequence length to be used at training.
 
         max_seq_len (int):
-            Maximum input sequence length to be used at t
-    # overrides
-    min_seq_len: int = 13
-    max_seq_len: int = 200
-    r: int = 1
-
-    # testing
-    test_sentences: List[str] = field(
-        default_factory=lambda: [
-
-        # dataset configs
-        compute_energy(bool):
-            Compute energy. defaults to True
-
-        energy_cache_path(str):
+            Maximum input sequence length to be used at    lr_scheduler_disc: str = "ExponentialLR"  # one of the schedulers from https:#pytorch.org/docs/stable/optim.html
+    lr_scheduler_disc_params: dict = field(default_factory=lambda: {"gamma": 0.999, "last_epoch": -1})
+    scheduler_after_epoch: bool = True
             energy cache path. defaults to None
     """
 
@@ -140,8 +128,8 @@ class FahConfig(BaseTTSConfig):
     use_ssim_loss: bool = False
     #ssim_loss_alpha: float = 1.0
     #spec_loss_alpha: float = 1.0
-    pitch_loss_alpha: float = 0.1
-    energy_loss_alpha: float = 0.1
+    pitch_loss_alpha: float = 0.2 #0.1
+    energy_loss_alpha: float = 0.2 #0.1 
     dur_loss_alpha: float = 1.0 #0.1
     use_mdn_loss: bool = True
     mdn_loss_alpha: float = 1.0
@@ -150,7 +138,7 @@ class FahConfig(BaseTTSConfig):
     disc_loss_alpha: float = 1.0
     gen_loss_alpha: float = 1.0
     feat_loss_alpha: float = 1.0
-    mel_loss_alpha: float = 45.0
+    mel_loss_alpha: float = 30.0 #45
 
     # overrides
     min_seq_len: int = 13
