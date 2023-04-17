@@ -105,12 +105,19 @@ class FahConfig(BaseTTSConfig):
     d_vector_dim: int = 0
 
     # optimizer parameters for FastAlign 
-    optimizer: str = "Adam"
-    optimizer_params: dict = field(default_factory=lambda: {"betas": [0.9, 0.998], "weight_decay": 1e-6})
+    #optimizer: str = "Adam"
+    #optimizer_params: dict = field(default_factory=lambda: {"betas": [0.9, 0.998], "weight_decay": 1e-6})
+    
+    optimizer: str = "AdamW"
+    optimizer_params: dict = field(default_factory=lambda: {"betas": [0.8, 0.99], "eps": 1e-9, "weight_decay": 0.01})
+    
+    
     #grad_clip: float = 5.0
     #grad clip updated to have 5.0 for both generator and discriminator(as per FastAlign initial config)
-    grad_clip: List[float] = field(default_factory=lambda: [5.0, 5.0])
-    
+    #grad_clip: List[float] = field(default_factory=lambda: [5.0, 5.0])
+
+    grad_clip: List[float] = field(default_factory=lambda: [1000, 1000])
+
     #Learning Rate parameters for FastAlign and HifiGan Generator
     lr_scheduler_gen: str = "NoamLR"
     lr_scheduler_gen_params: dict = field(default_factory=lambda: {"warmup_steps": 4000})
