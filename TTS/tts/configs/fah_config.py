@@ -118,10 +118,13 @@ class FahConfig(BaseTTSConfig):
 
     grad_clip: List[float] = field(default_factory=lambda: [1000, 1000])
 
-    #Learning Rate parameters for FastAlign and HifiGan Generator
-    lr_scheduler_gen: str = "NoamLR"
-    lr_scheduler_gen_params: dict = field(default_factory=lambda: {"warmup_steps": 4000})
-    lr_gen: float = 1e-4
+    #Learning Rate parameters for FastAlign and HifiGan Generator, as per vits config
+    #lr_scheduler_gen: str = "NoamLR"
+    #lr_scheduler_gen_params: dict = field(default_factory=lambda: {"warmup_steps": 4000})
+    #lr_gen: float = 1e-4
+    lr_gen: float = 0.0002
+    lr_scheduler_gen: str = "ExponentialLR"
+    lr_scheduler_gen_params: dict = field(default_factory=lambda: {"gamma": 0.999875, "last_epoch": -1})
 
     #Learning Rate parameters for Hifigan Discriminator, as per vits config
     lr_disc: float = 0.0002
