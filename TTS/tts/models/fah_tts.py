@@ -47,7 +47,7 @@ def wav_to_spec(y, n_fft, hop_length, win_length, center=False):
     y = y.squeeze(1)
     if torch.isnan(y).any():
         print("y is nan")
-    y=torch.nan_to_num(y)
+        y=torch.nan_to_num(y)
 
     if torch.min(y) < -1.0:
         print("min value is ", torch.min(y))
@@ -68,7 +68,7 @@ def wav_to_spec(y, n_fft, hop_length, win_length, center=False):
     y = y.squeeze(1)
     if torch.isnan(y).any():
         print("padded y is nan")
-    y=torch.nan_to_num(y)    
+        y=torch.nan_to_num(y)    
 
     spec = torch.stft(
         y,
@@ -84,7 +84,7 @@ def wav_to_spec(y, n_fft, hop_length, win_length, center=False):
     )
     if torch.isnan(spec).any():
         print("spec is nan")
-    spec=torch.nan_to_num(spec)
+        spec=torch.nan_to_num(spec)
     spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-6)
     return spec
 
@@ -122,7 +122,7 @@ def wav_to_mel(y, n_fft, num_mels, sample_rate, hop_length, win_length, fmin, fm
     y = y.squeeze(1)
     if torch.isnan(y).any():
         print("wavtomel y is nan")
-    y=torch.nan_to_num(y)
+        y=torch.nan_to_num(y)
 
     if torch.min(y) < -1.0:
         print("min value is ", torch.min(y))
@@ -147,7 +147,7 @@ def wav_to_mel(y, n_fft, num_mels, sample_rate, hop_length, win_length, fmin, fm
     y = y.squeeze(1)
     if torch.isnan(y).any():
         print("wavtomel y after padding is nan")
-    y=torch.nan_to_num(y)
+        y=torch.nan_to_num(y)
     spec = torch.stft(
         y,
         n_fft,
@@ -162,7 +162,7 @@ def wav_to_mel(y, n_fft, num_mels, sample_rate, hop_length, win_length, fmin, fm
     )
     if torch.isnan(spec).any():
         print("wavtomel spec after stft is nan")
-    spec=torch.nan_to_num(spec)
+        spec=torch.nan_to_num(spec)
     spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-6)
     spec = torch.matmul(mel_basis[fmax_dtype_device], spec)
     spec = amp_to_db(spec)
@@ -538,7 +538,7 @@ class FahTTS(BaseTTS):
         o_en_ex = torch.matmul(attn.squeeze(1).transpose(1, 2).to(en.dtype), en.transpose(1, 2)).transpose(1, 2)
         if torch.isnan(o_en_ex).any():
             print("expand encoder : nan in o_en_ex")
-        o_en_ex=torch.nan_to_num(o_en_ex)  
+            o_en_ex=torch.nan_to_num(o_en_ex)  
         return o_en_ex, attn
 
     def format_durations(self, o_dr_log, x_mask):
@@ -796,18 +796,28 @@ class FahTTS(BaseTTS):
             - g: :math:`[B, C]`
             - pitch: :math:`[B, 1, T]`
         """
-        #check the input
-        ts = [x,x_lengths,y_lengths,waveform,y,pitch,energy]
-        ns=["x","x_lengths","y_lengths","waveform","y","pitch,energy"]
-        for t,n  in zip(ts,ns):
-            if torch.isnan(t).any():
-                print("nan in ",n)
-                x=torch.nan_to_num(x)
-                x_lengths=torch.nan_to_num(x_lengths)
-                y_lengths=torch.nan_to_num(y_lengths)
-                y=torch.nan_to_num(y)
-                pitch=torch.nan_to_num(pitch)
-                energy=torch.nan_to_num(energy)
+        #check the input      
+        if torch.isnan(x).any():
+            print("x is nan in train_step opti 0")
+            x = torch.nan_to_num(x)
+        if torch.isnan(x_lengths).any():
+            print("x_lengths is nan in train_step opti 0")
+            x_lengths = torch.nan_to_num(x_lengths)
+        if torch.isnan(y_lengths).any():
+            print("y_lengths is nan in train_step opti 0")
+            y_lengths = torch.nan_to_num(y_lengths)
+        if torch.isnan(waveform).any():
+            print("waveform is nan in train_step opti 0")
+            waveform = torch.nan_to_num(waveform)
+        if torch.isnan(y).any():
+            print("y is nan in train_step opti 0")
+            y = torch.nan_to_num(y)
+        if torch.isnan(pitch).any():
+            print("pitch is nan in train_step opti 0")
+            pitch = torch.nan_to_num(pitch)
+        if torch.isnan(energy).any():
+            print("energy is nan in train_step opti 0")
+            energy = torch.nan_to_num(energy)
 
 
 
@@ -832,10 +842,14 @@ class FahTTS(BaseTTS):
             o_dr_log = self.duration_predictor(o_en.detach(), x_mask)
         else:
             o_dr_log = self.duration_predictor(o_en, x_mask)
-        o_dr_log=torch.nan_to_num(o_dr_log)
+        if torch.isnan(o_dr_log).any():
+            print("o_dr_log is nan")
+            o_dr_log=torch.nan_to_num(o_dr_log)
         #o_dr_log=self._remove_inf(o_dr_log)
         o_dr = torch.clamp(torch.exp(o_dr_log) - 1, 0, self.max_duration)
-        o_dr=torch.nan_to_num(o_dr)
+        if torch.isnan(o_dr).any():
+            print("o_dr is nan")
+            o_dr=torch.nan_to_num(o_dr)
         #o_dr=self._remove_inf(o_dr)
         # generate attn mask from predicted durations
         o_attn = self.generate_attn(o_dr.squeeze(1), x_mask)
@@ -849,7 +863,9 @@ class FahTTS(BaseTTS):
             dr_mas, mu, log_sigma, logp = self._forward_mdn(o_en_nospeaker, y.transpose(1, 2), y_lengths, x_mask)
             #dr_mas=self._remove_inf(dr_mas)
             dr_mas_log = torch.log(dr_mas + 1).squeeze(1)
-            dr_mas_log=torch.nan_to_num(dr_mas_log)
+            if torch.isnan(dr_mas_log).any():
+                print("dr_mas_log is nan")
+                dr_mas_log=torch.nan_to_num(dr_mas_log)
             #dr_mas_log=self._remove_inf(dr_mas_log)
             #o_alignment_dur, alignment_soft, alignment_logprob, alignment_mas = self._forward_aligner(
             #    x_emb, y, x_mask, y_mask
@@ -879,23 +895,23 @@ class FahTTS(BaseTTS):
         # expand o_en with durations
         if torch.isnan(o_en).any():
             print("nan in o_en, before expand encoder output pass in forward")
-        o_en=torch.nan_to_num(o_en)  
+            o_en=torch.nan_to_num(o_en)  
         if torch.isnan(dr_mas).any():
             print("nan in dr_mas, before expand encoder output pass in forward")
-        dr_mas=torch.nan_to_num(dr_mas)  
+            dr_mas=torch.nan_to_num(dr_mas)  
         if torch.isnan(x_mask).any():
             print("nan in x_mask, before expand encoder output pass in forward")
-        x_mask=torch.nan_to_num(x_mask)  
+            x_mask=torch.nan_to_num(x_mask)  
         if torch.isnan(y_mask).any():
             print("nan in y_mask, before expand encoder output pass in forward")
-        y_mask=torch.nan_to_num(y_mask)  
+            y_mask=torch.nan_to_num(y_mask)  
         o_en_ex, attn = self.expand_encoder_outputs(o_en, dr_mas, x_mask, y_mask)
         if torch.isnan(o_en_ex).any():
             print("nan in o_en_ex, after expand encoder output pass in forward")
-        o_en_ex=torch.nan_to_num(o_en_ex)  
+            o_en_ex=torch.nan_to_num(o_en_ex)  
         if torch.isnan(attn).any():
             print("nan in attn, after expand encoder output pass in forward")
-        attn=torch.nan_to_num(attn)  
+            attn=torch.nan_to_num(attn)  
         #o_en_ex=self._remove_inf(o_en_ex)
         #attn=self._remove_inf(attn)
         # positional encoding
@@ -903,21 +919,21 @@ class FahTTS(BaseTTS):
             o_en_ex = self.pos_encoder(o_en_ex, y_mask)
             if torch.isnan(o_en_ex).any():
                 print("nan in o_en_ex, after pos encoder  pass in forward")
-            o_en_ex=torch.nan_to_num(o_en_ex)
+                o_en_ex=torch.nan_to_num(o_en_ex)
             #o_en_ex=self._remove_inf(o_en_ex)
 
         # select a random feature segment for the waveform decoder
         z_slice, slice_ids = rand_segments(o_en_ex, y_lengths, self.spec_segment_size, let_short_samples=True, pad_short=True)
         if torch.isnan(z_slice).any():
             print("nan in z_slice, after rand_segment pass in forward")
-        z_slice=torch.nan_to_num(z_slice)    
+            z_slice=torch.nan_to_num(z_slice)    
         #z_slice=self._remove_inf(z_slice)
 
         #wav decoder pass
         o_wav = self.waveform_decoder(z_slice, g=g)
         if torch.isnan(o_wav).any():
             print("nan in o_wav, after weveform decoder pass in forward")
-        o_wav=torch.nan_to_num(o_wav)
+            o_wav=torch.nan_to_num(o_wav)
     
         wav_seg = segment(
             waveform,
@@ -927,7 +943,7 @@ class FahTTS(BaseTTS):
         )
         if torch.isnan(wav_seg).any():
             print("nan in wav_seg")
-        wav_seg=torch.nan_to_num(wav_seg)
+            wav_seg=torch.nan_to_num(wav_seg)
 
         # decoder pass
         #o_de, attn = self._forward_decoder(
@@ -1031,17 +1047,25 @@ class FahTTS(BaseTTS):
             #Addition for VITS
             waveform = batch["waveform"]
 
-            ts=[text_input,text_lengths,mel_input,mel_lengths,pitch,energy]
-            ns=["text_input","text_lengths","mel_input","mel_lengths","pitch","energy"]
-            for t,n in zip(ts,ns):
-                if torch.isnan(t).any():
-                    print(n," is nan")
-            text_input = torch.nan_to_num(text_input)
-            text_lengths = torch.nan_to_num(text_lengths)
-            mel_input = torch.nan_to_num(mel_input)
-            mel_lengths = torch.nan_to_num(mel_lengths)
-            pitch = torch.nan_to_num(pitch)
-            energy = torch.nan_to_num(energy)
+            if torch.isnan(text_input).any():
+                print("text_input is nan in train_step opti 0")
+                text_input = torch.nan_to_num(text_input)
+            if torch.isnan(text_lengths).any():
+                print("text_lengths is nan in train_step opti 0")
+                text_lengths = torch.nan_to_num(text_lengths)
+            if torch.isnan(mel_input).any():
+                print("mel_input is nan in train_step opti 0")
+                mel_input = torch.nan_to_num(mel_input)
+            if torch.isnan(mel_lengths).any():
+                print("mel_lengths is nan in train_step opti 0")
+                mel_lengths = torch.nan_to_num(mel_lengths)
+            if torch.isnan(pitch).any():
+                print("pitch is nan in train_step opti 0")
+                pitch = torch.nan_to_num(pitch)
+            if torch.isnan(energy).any():
+                print("energy is nan in train_step opti 0")
+                energy = torch.nan_to_num(energy)
+            
 
             # generator forward pass
             outputs = self.forward(
@@ -1092,7 +1116,7 @@ class FahTTS(BaseTTS):
             )
             if torch.isnan(batch["spec"]).any():
                 print("batch[spec] is nan")
-            batch["spec"]=torch.nan_to_num(batch["spec"])
+                batch["spec"]=torch.nan_to_num(batch["spec"])
 
             if self.args.encoder_sample_rate:
                 # recompute spec with high sampling rate to the loss
@@ -1113,10 +1137,10 @@ class FahTTS(BaseTTS):
 
             if torch.isnan(batch["spec"]).any():
                 print("batch[spec] is nan again")
-            batch["spec"]=torch.nan_to_num(batch["spec"])
+                batch["spec"]=torch.nan_to_num(batch["spec"])
             if torch.isnan(spec_mel).any():
                 print("spec_mel is nan ")
-            spec_mel=torch.nan_to_num(spec_mel)
+                spec_mel=torch.nan_to_num(spec_mel)
 
 
             batch["mel"] = spec_to_mel(
@@ -1139,10 +1163,10 @@ class FahTTS(BaseTTS):
             text_lengths = batch["text_lengths"]
             if torch.isnan(batch["mel_lengths"]).any():
                 print("batch[mel_lengths] is nan")
-            batch["mel_lengths"]=torch.nan_to_num(batch["mel_lengths"])
+                batch["mel_lengths"]=torch.nan_to_num(batch["mel_lengths"])
             if torch.isnan(batch["text_lengths"]).any():
                 print("batch[text_lengths] is nan")
-            batch["text_lengths"]=torch.nan_to_num(batch["text_lengths"])
+                batch["text_lengths"]=torch.nan_to_num(batch["text_lengths"])
 
             # compute melspec segment
             with autocast(enabled=False):
@@ -1156,7 +1180,7 @@ class FahTTS(BaseTTS):
                 )
                 if torch.isnan(self.model_outputs_cache["model_outputs"]).any():
                     print("self.model_outputs_cache[\"model_outputs\"] is nan")
-                self.model_outputs_cache["model_outputs"]=torch.nan_to_num(self.model_outputs_cache["model_outputs"])
+                    self.model_outputs_cache["model_outputs"]=torch.nan_to_num(self.model_outputs_cache["model_outputs"])
                 mel_slice_hat = wav_to_mel(
                     y=self.model_outputs_cache["model_outputs"].float(),
                     n_fft=self.config.audio.fft_size,
@@ -1170,10 +1194,10 @@ class FahTTS(BaseTTS):
                 )
             if torch.isnan(mel_slice).any():
                 print("mel_slice is nan")
-            mel_slice=torch.nan_to_num(mel_slice)
+                mel_slice=torch.nan_to_num(mel_slice)
             if torch.isnan(mel_slice_hat).any():
                 print("mel_slice_hat is nan")
-            mel_slice_hat=torch.nan_to_num(mel_slice_hat)
+                mel_slice_hat=torch.nan_to_num(mel_slice_hat)
 
             # compute discriminator scores and features
             scores_disc_fake, feats_disc_fake, _, feats_disc_real = self.disc(
@@ -1193,7 +1217,7 @@ class FahTTS(BaseTTS):
                 durations = self.model_outputs_cache["o_alignment_dur"]
                 if torch.isnan(durations).any():
                     print("durations is nan")
-                durations=torch.nan_to_num(durations)
+                    durations=torch.nan_to_num(durations)
             # use float32 in AMP
             with autocast(enabled=False):
                 # compute losses
