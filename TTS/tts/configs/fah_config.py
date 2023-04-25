@@ -112,19 +112,17 @@ class FahConfig(BaseTTSConfig):
     optimizer_params: dict = field(default_factory=lambda: {"betas": [0.8, 0.99], "eps": 1e-9, "weight_decay": 0.01})
     
     
-    #grad_clip: float = 5.0
-    #grad clip updated to have 5.0 for both generator and discriminator(as per FastAlign initial config)
-    #grad_clip: List[float] = field(default_factory=lambda: [5.0, 5.0])
-
-    grad_clip: List[float] = field(default_factory=lambda: [1000, 1000])
+    #grad clip updated to have 5.0 for generator (as per FastAlign initial config) and 1000 for discriminator (as per VITS)
+    grad_clip: List[float] = field(default_factory=lambda: [1000, 5.0])
 
     #Learning Rate parameters for FastAlign and HifiGan Generator, as per vits config
-    #lr_scheduler_gen: str = "NoamLR"
-    #lr_scheduler_gen_params: dict = field(default_factory=lambda: {"warmup_steps": 4000})
-    #lr_gen: float = 1e-4
-    lr_gen: float = 0.0002
-    lr_scheduler_gen: str = "ExponentialLR"
-    lr_scheduler_gen_params: dict = field(default_factory=lambda: {"gamma": 0.999875, "last_epoch": -1})
+    lr_scheduler_gen: str = "NoamLR"
+    #actually warmup_epochs, so its 20*6500= 13k steps instead of 4000 steps
+    lr_scheduler_gen_params: dict = field(default_factory=lambda: {"warmup_steps": 20}) 
+    lr_gen: float = 1e-5 #1e-4
+    #lr_gen: float = 0.0002
+    #lr_scheduler_gen: str = "ExponentialLR"
+    #lr_scheduler_gen_params: dict = field(default_factory=lambda: {"gamma": 0.999875, "last_epoch": -1})
 
     #Learning Rate parameters for Hifigan Discriminator, as per vits config
     lr_disc: float = 0.0002
@@ -140,15 +138,15 @@ class FahConfig(BaseTTSConfig):
     #spec_loss_alpha: float = 1.0
     pitch_loss_alpha: float = 0.2 #0.1
     energy_loss_alpha: float = 0.2 #0.1 
-    dur_loss_alpha: float = 1.0 #0.1
+    dur_loss_alpha: float = 2.0 #0.1
     use_mdn_loss: bool = True
-    mdn_loss_alpha: float = 1.0
+    mdn_loss_alpha: float = 2.0 #1.0
 
     # loss params for Vits waveform generator and discriminator
     disc_loss_alpha: float = 1.0
-    gen_loss_alpha: float = 1.0
-    feat_loss_alpha: float = 1.0
-    mel_loss_alpha: float = 30.0 #45
+    gen_loss_alpha: float = 0.5 #1.0
+    feat_loss_alpha: float = 0.5 #1.0
+    mel_loss_alpha: float = 15.0 #45 puis 30.0
 
     # overrides
     min_seq_len: int = 13
