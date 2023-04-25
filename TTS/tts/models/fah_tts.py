@@ -1153,7 +1153,7 @@ class FahTTS(BaseTTS):
             )
             if torch.isnan(batch["mel"]).any():
                 print("batch[mel] is nan")
-            batch["mel"]=torch.nan_to_num(batch["mel"])
+                batch["mel"]=torch.nan_to_num(batch["mel"])
 
 
 
