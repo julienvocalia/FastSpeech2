@@ -809,9 +809,9 @@ class JalfahTTS(BaseTTS):
         mel_lengths= (mel.shape[2] * wav_rel_lens).int()
 
         # zero the padding frames
-        mel= mel* sequence_mask(mel_lengths).unsqueeze(1)
+        mel= mel* sequence_mask(mel_lengths.to('cuda')).unsqueeze(1)
 
-        return mel.transpose_(1, 2), mel_lengths
+        return mel.transpose_(1, 2).to('cuda'), mel_lengths.to('cuda')
 
     def train_step(self, batch: dict, criterion: nn.Module, optimizer_idx: int):
         text_input = batch["text_input"]
