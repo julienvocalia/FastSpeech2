@@ -1032,25 +1032,25 @@ class JalfahTTS(BaseTTS):
             return self.model_outputs_cache, loss_dict
 
     def _create_logs(self, batch, outputs, ap):
-        """Create common logger outputs."""
-        model_outputs = outputs["model_outputs"]
-        alignments = outputs["alignments"]
-        mel_input = batch["mel_input"]
+        #adding VITS logs
+        y_hat = outputs[1]["model_outputs"]
+        y = outputs[1]["waveform_seg"]
+        figures = plot_results(y_hat, y, ap)
+        sample_voice = y_hat[0].squeeze(0).detach().cpu().numpy()
+        #train_audio = {"audio": sample_voice}
 
-        pred_spec = model_outputs[0].data.cpu().numpy()
-        gt_spec = mel_input[0].data.cpu().numpy()
-        align_img = alignments[0].data.cpu().numpy()
-
-        figures = {
-            "prediction": plot_spectrogram(pred_spec, ap, output_fig=False),
-            "ground_truth": plot_spectrogram(gt_spec, ap, output_fig=False),
-            "alignment": plot_alignment(align_img, output_fig=False),
-        }
+        alignments = outputs[1]["alignments"]
+        align_img = alignments[0].data.cpu().numpy().T
+        figures.update(
+            {
+                "alignment": plot_alignment(align_img, output_fig=False),
+            }
+        )
 
         # plot pitch figures
         if self.args.use_pitch:
-            pitch_avg = abs(outputs["pitch_avg_gt"][0, 0].data.cpu().numpy())
-            pitch_avg_hat = abs(outputs["pitch_avg"][0, 0].data.cpu().numpy())
+            pitch_avg = abs(outputs[1]["pitch_avg_gt"][0, 0].data.cpu().numpy())
+            pitch_avg_hat = abs(outputs[1]["pitch_avg"][0, 0].data.cpu().numpy())
             chars = self.tokenizer.decode(batch["text_input"][0].data.cpu().numpy())
             pitch_figures = {
                 "pitch_ground_truth": plot_avg_pitch(pitch_avg, chars, output_fig=False),
@@ -1060,8 +1060,8 @@ class JalfahTTS(BaseTTS):
 
         # plot energy figures
         if self.args.use_energy:
-            energy_avg = abs(outputs["energy_avg_gt"][0, 0].data.cpu().numpy())
-            energy_avg_hat = abs(outputs["energy_avg"][0, 0].data.cpu().numpy())
+            energy_avg = abs(outputs[1]["energy_avg_gt"][0, 0].data.cpu().numpy())
+            energy_avg_hat = abs(outputs[1]["energy_avg"][0, 0].data.cpu().numpy())
             chars = self.tokenizer.decode(batch["text_input"][0].data.cpu().numpy())
             energy_figures = {
                 "energy_ground_truth": plot_avg_energy(energy_avg, chars, output_fig=False),
@@ -1071,12 +1071,10 @@ class JalfahTTS(BaseTTS):
 
         # plot the attention mask computed from the predicted durations
         if "attn_durations" in outputs:
-            alignments_hat = outputs["attn_durations"][0].data.cpu().numpy()
+            alignments_hat = outputs[1]["attn_durations"][0].data.cpu().numpy()
             figures["alignment_hat"] = plot_alignment(alignments_hat.T, output_fig=False)
-
-        # Sample audio
-        train_audio = ap.inv_melspectrogram(pred_spec.T)
-        return figures, {"audio": train_audio}
+    
+        return figures, {"audio": sample_voice}
 
     def train_log(
         self, batch: dict, outputs: dict, logger: "Logger", assets: dict, steps: int
