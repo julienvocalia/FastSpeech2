@@ -24,6 +24,7 @@ from TTS.tts.utils.helpers import rand_segments, segment #from VITS
 from librosa.filters import mel as librosa_mel_fn #from VITS
 from trainer.trainer_utils import get_optimizer, get_scheduler #from VITS
 from itertools import chain #from VITS
+import torchaudio #from VITS
 
 ##############################
 # IO / Feature extraction
@@ -90,12 +91,85 @@ def wav_to_mel(y, n_fft, num_mels, sample_rate, hop_length, win_length, fmin, fm
     spec = amp_to_db(spec)
     return spec
 
+def wav_to_spec(y, n_fft, hop_length, win_length, center=False):
+    """
+    Args Shapes:
+        - y : :math:`[B, 1, T]`
+
+    Return Shapes:
+        - spec : :math:`[B,C,T]`
+    """
+    y = y.squeeze(1)
+    if torch.isnan(y).any():
+        print("y is nan")
+        y=torch.nan_to_num(y)
+
+    if torch.min(y) < -1.0:
+        print("min value is ", torch.min(y))
+    if torch.max(y) > 1.0:
+        print("max value is ", torch.max(y))
+
+    global hann_window
+    dtype_device = str(y.dtype) + "_" + str(y.device)
+    wnsize_dtype_device = str(win_length) + "_" + dtype_device
+    if wnsize_dtype_device not in hann_window:
+        hann_window[wnsize_dtype_device] = torch.hann_window(win_length).to(dtype=y.dtype, device=y.device)
+
+    #print("y:",str(y.size()))
+    y = torch.nn.functional.pad(
+        y.unsqueeze(1),
+        (int((n_fft - hop_length) / 2), int((n_fft - hop_length) / 2)),
+        mode="reflect",
+    )
+    y = y.squeeze(1)
+    if torch.isnan(y).any():
+        print("padded y is nan")
+        y=torch.nan_to_num(y)    
+
+    spec = torch.stft(
+        y,
+        n_fft,
+        hop_length=hop_length,
+        win_length=win_length,
+        window=hann_window[wnsize_dtype_device],
+        center=center,
+        pad_mode="reflect",
+        normalized=False,
+        onesided=True,
+        return_complex=False,
+    )
+    if torch.isnan(spec).any():
+        print("spec is nan")
+        spec=torch.nan_to_num(spec)
+    spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-6)
+    return spec
+
+def spec_to_mel(spec, n_fft, num_mels, sample_rate, fmin, fmax):
+    """
+    Args Shapes:
+        - spec : :math:`[B,C,T]`
+
+    Return Shapes:
+        - mel : :math:`[B,C,T]`
+    """
+    global mel_basis
+    dtype_device = str(spec.dtype) + "_" + str(spec.device)
+    fmax_dtype_device = str(fmax) + "_" + dtype_device
+    if fmax_dtype_device not in mel_basis:
+        mel = librosa_mel_fn(sample_rate, n_fft, num_mels, fmin, fmax)
+        mel_basis[fmax_dtype_device] = torch.from_numpy(mel).to(dtype=spec.dtype, device=spec.device)
+    mel = torch.matmul(mel_basis[fmax_dtype_device], spec)
+    mel = amp_to_db(mel)
+    return mel
+
+
 
 @dataclass
 class JalfahTTSArgs(Coqpit):
     num_chars: int = None
-    out_channels: int = 80
-    hidden_channels: int = 256 #384
+    out_channels: int = 256 #80
+    mdn_out_channels: int = 80*2
+    hidden_channels: int = 256
     use_aligner: bool = True
     # pitch params
     use_pitch: bool = True
@@ -121,11 +195,11 @@ class JalfahTTSArgs(Coqpit):
     length_scale: int = 1
     encoder_type: str = "fftransformer"
     encoder_params: dict = field(
-        default_factory=lambda: {"hidden_channels_ffn": 1024, "num_heads": 1, "num_layers": 6, "dropout_p": 0.1}
+        default_factory=lambda: {"hidden_channels_ffn": 1024, "num_heads": 2, "num_layers": 6, "dropout_p": 0.1}
     )
     decoder_type: str = "fftransformer"
     decoder_params: dict = field(
-        default_factory=lambda: {"hidden_channels_ffn": 1024, "num_heads": 1, "num_layers": 6, "dropout_p": 0.1}
+        default_factory=lambda: {"hidden_channels_ffn": 1024, "num_heads": 2, "num_layers": 6, "dropout_p": 0.1}
     )
     detach_duration_predictor: bool = True
     max_duration: int = 75
@@ -151,6 +225,8 @@ class JalfahTTSArgs(Coqpit):
     periods_multi_period_discriminator: List[int] = field(default_factory=lambda: [2, 3, 5, 7, 11])
     use_spectral_norm_disriminator: bool = False
     encoder_sample_rate: int = None
+    #encoder_sample_rate: int = 152
+    #interpolate_z: bool = True
 
 
 class JalfahTTS(BaseTTS):
@@ -167,6 +243,7 @@ class JalfahTTS(BaseTTS):
         self._set_model_args(config)
 
         self.init_multispeaker(config)
+        #self.init_upsampling()
 
         self.max_duration = self.args.max_duration
         self.use_aligner = self.args.use_aligner
@@ -199,6 +276,7 @@ class JalfahTTS(BaseTTS):
         #from VITS
         self.waveform_decoder = HifiganGenerator(
             self.args.hidden_channels,
+            #152,
             1,
             self.args.resblock_type_decoder,
             self.args.resblock_dilation_sizes_decoder,
@@ -248,7 +326,8 @@ class JalfahTTS(BaseTTS):
         if self.args.use_aligner:
             self.mdn_block = MDNBlock(
                 config.model_args.hidden_channels, 
-                2 * config.model_args.out_channels
+                #2 * config.model_args.out_channels
+                config.model_args.mdn_out_channels
             )
         
         #from VITS
@@ -286,6 +365,16 @@ class JalfahTTS(BaseTTS):
             print(" > Init speaker_embedding layer.")
             self.emb_g = nn.Embedding(self.num_speakers, self.args.hidden_channels)
             nn.init.uniform_(self.emb_g.weight, -0.1, 0.1)
+
+    def init_upsampling(self):
+        """
+        Initialize upsampling modules of a model.
+        """
+        if self.args.encoder_sample_rate:
+            self.interpolate_factor = self.config.audio["sample_rate"] / self.args.encoder_sample_rate
+            self.audio_resampler = torchaudio.transforms.Resample(
+                orig_freq=self.config.audio["sample_rate"], new_freq=self.args.encoder_sample_rate
+            )  # pylint: disable=W0201
 
     @staticmethod
     def generate_attn(dr, x_mask, y_mask=None):
@@ -376,13 +465,21 @@ class JalfahTTS(BaseTTS):
         y_mask = torch.unsqueeze(sequence_mask(y_lengths, None), 1).to(o_en.dtype)
         # expand o_en with durations
         o_en_ex, attn = self.expand_encoder_outputs(o_en, dr, x_mask, y_mask)
+        #print("---> In forward_mel_decoder/expand encoder outputs")
+        #print("---> o_en_ex : ",str(o_en_ex.size()))
+        #print("---> attn:",str(attn.size()))
         # positional encoding
         if hasattr(self, "pos_encoder"):
             o_en_ex = self.pos_encoder(o_en_ex, y_mask)
+        #print("---> after pos encoder")
+        #print("---> o_en_ex:",str(o_en_ex.size()))
         # decoder pass
         o_de = self.mel_decoder(o_en_ex, y_mask, g=g)
-        return o_de.transpose(1, 2), attn.transpose(1, 2)
-
+        #print("---> after decoder pass")
+        #print("---> o_de",str(o_de.size()))
+        #return o_de.transpose(1, 2), attn.transpose(1, 2)
+        return o_de, attn
+    
     def _forward_pitch_predictor(
         self,
         o_en: torch.FloatTensor,
@@ -462,11 +559,11 @@ class JalfahTTS(BaseTTS):
         waveform: torch.Tensor,
         g: torch.tensor = None
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        
         # select a random feature segment for the waveform decoder
         z_slice, slice_ids = rand_segments(z, y_lengths, self.spec_segment_size, let_short_samples=True, pad_short=True)
 
         # interpolate z if needed
-        print("upsampling?")
         z_slice, spec_segment_size, slice_ids, _ = self.upsampling_z(z_slice, slice_ids=slice_ids)
 
         o = self.waveform_decoder(z_slice, g=g)
@@ -483,7 +580,7 @@ class JalfahTTS(BaseTTS):
     def upsampling_z(self, z, slice_ids=None, y_lengths=None, y_mask=None):
         spec_segment_size = self.spec_segment_size
         if self.args.encoder_sample_rate:
-            print("upsampling!")
+            #print("upsampling!")
             # recompute the slices and spec_segment_size if needed
             slice_ids = slice_ids * int(self.interpolate_factor) if slice_ids is not None else slice_ids
             spec_segment_size = spec_segment_size * int(self.interpolate_factor)
@@ -517,44 +614,60 @@ class JalfahTTS(BaseTTS):
         energy: torch.FloatTensor = None,
         aux_input: Dict = {"d_vectors": None, "speaker_ids": None},  # pylint: disable=unused-argument
     ) -> Dict:
-        
+        #print("--begin forward--")
         #we proper compute the embedding of g 
         g=self._forward_speaker_embedding(aux_input)
-
+        #print("g:",str(g.size()))
         # compute sequence masks
         y_mask = torch.unsqueeze(sequence_mask(y_lengths, None), 1).float()
         x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.shape[1]), 1).float()
-
+        #print("y_mask:",str(y_mask.size()))
+        #print("x_mask:",str(x_mask.size()))
         # encoder pass
         o_en,o_en_nospeaker, x_mask, _ = self._forward_encoder(x, x_mask, g)
-
+        #print("o_en:",str(o_en.size()))
+        #print("o_en_nospeaker:",str(o_en_nospeaker.size()))
+        #print("x_mask:",str(x_mask.size()))
         # duration predictor pass
         if self.args.detach_duration_predictor:
             o_dr_log = self.duration_predictor(o_en.detach(), x_mask)
         else:
             o_dr_log = self.duration_predictor(o_en, x_mask)
+        #print("o_dr_log:",str(o_dr_log.size()))
         o_dr = torch.clamp(torch.exp(o_dr_log) - 1, 0, self.max_duration)
-
+        #print("o_dr:",str(o_dr.size()))
         # generate attn mask from predicted durations
+        #print("generate attention")
         o_attn = self.generate_attn(o_dr.squeeze(1), x_mask)
-
+        #print("o_attn:",str(o_attn.size()))
         # aligner
         if self.use_aligner:
+            #print("calling forward mdn with:")
+            #print("--->o_en_nospeaker : ",str(o_en_nospeaker.size()))
+            #print("--->y.transpose(1, 2), : ",str(y.transpose(1, 2).size()))
+            #print("--->y_lengths : ",str(y_lengths.size()))
+            #print("--->x_mask : ",str(x_mask.size()))
             dr_mas, _, _, logp = self._forward_mdn(o_en_nospeaker, y.transpose(1, 2), y_lengths, x_mask)
             dr_mas_log = torch.log(dr_mas + 1).squeeze(1)
-
+            #print("dr_mas:",str(dr_mas.size()))
+            #print("logp:",str(logp.size()))
+            #print("dr_mas_log:",str(dr_mas_log.size()))
         # pitch predictor pass
         o_pitch = None
         avg_pitch = None
         if self.args.use_pitch:
             o_pitch_emb, o_pitch, avg_pitch = self._forward_pitch_predictor(o_en, x_mask, pitch, dr_mas)
-
+            #print("o_pitch_emb:",str(o_pitch_emb.size()))
+            #print("o_pitch:",str(o_pitch.size()))
+            #print("avg_pitch:",str(avg_pitch.size()))
         # energy predictor pass
         o_energy = None
         avg_energy = None
         if self.args.use_energy:
             o_energy_emb, o_energy, avg_energy = self._forward_energy_predictor(o_en, x_mask, energy, dr_mas)
-
+            #print("o_energy_emb:",str(o_energy_emb.size()))
+            #print("o_energy:",str(o_energy.size()))
+            #print("avg_energy:",str(avg_energy.size()))
         #add pitch and/or energy embedding to o_en
         if self.args.use_pitch : o_en=o_en+o_pitch_emb
         if self.args.use_energy : o_en=o_en+o_energy_emb
@@ -563,7 +676,8 @@ class JalfahTTS(BaseTTS):
         o_de, attn = self._forward_mel_decoder(
             o_en, dr_mas, x_mask, y_lengths, g=None
         )
-
+        #print("o_de:",str(o_de.size()))
+        #print("attn:",str(attn.size()))
         # waveform decoder pass
         o_wav,wav_seg, slice_ids=self._forward_waveform_decoder(
             z = o_de,
@@ -571,7 +685,10 @@ class JalfahTTS(BaseTTS):
             waveform = waveform,
             g=g,
         )
-
+        #print("o_wav:",str(o_wav.size()))
+        #print("wav_seg:",str(wav_seg.size()))
+        #print("slice_ids:",str(slice_ids.size()))
+        #print("--end forward--")
         outputs = {
             #"model_outputs": o_de,  # [B, T, C]
             "durations_log": o_dr_log.squeeze(1),  # [B, T]
@@ -642,6 +759,60 @@ class JalfahTTS(BaseTTS):
         }
         return outputs
 
+    def transform_batch(self,batch_waveform):
+        wav_lens = [w.shape[1] for w in batch_waveform]
+        wav_lens = torch.LongTensor(wav_lens)
+        wav_lens_max = torch.max(wav_lens)
+        wav_rel_lens = wav_lens / wav_lens_max
+
+        if self.args.encoder_sample_rate:
+            wav = self.audio_resampler(batch_waveform)
+        else:
+            wav = batch_waveform
+
+        # compute spectrograms    
+        spec = wav_to_spec(
+            wav,
+            self.config.audio.fft_size,
+            self.config.audio.hop_length,
+            self.config.audio.win_length,
+            center=False
+        )
+
+        if self.args.encoder_sample_rate:
+            # recompute spec with high sampling rate to the loss
+            spec_mel = wav_to_spec(
+                wav, 
+                self.config.audio.fft_size,
+                self.config.audio.hop_length,
+                self.config.audio.win_length,
+                center=False
+            )
+            # remove extra stft frames if needed
+            if spec_mel.size(2) > int(spec.size(2) * self.interpolate_factor):
+                spec_mel = spec_mel[:, :, : int(spec.size(2) * self.interpolate_factor)]
+            else:
+                spec = spec[:, :, : int(spec_mel.size(2) / self.interpolate_factor)]
+        else:
+            spec_mel = spec
+
+        mel= spec_to_mel(
+            spec=spec_mel,
+            n_fft=self.config.audio.fft_size,
+            num_mels=self.config.audio.num_mels,
+            sample_rate=self.config.audio.sample_rate,
+            fmin=self.config.audio.mel_fmin,
+            fmax=self.config.audio.mel_fmax,
+        )
+
+        # compute spectrogram frame lengths
+        mel_lengths= (mel.shape[2] * wav_rel_lens).int()
+
+        # zero the padding frames
+        mel= mel* sequence_mask(mel_lengths).unsqueeze(1)
+
+        return mel.transpose_(1, 2), mel_lengths
+
     def train_step(self, batch: dict, criterion: nn.Module, optimizer_idx: int):
         text_input = batch["text_input"]
         text_lengths = batch["text_lengths"]
@@ -656,15 +827,77 @@ class JalfahTTS(BaseTTS):
         #addition for VITS
         waveform=batch["waveform"].transpose_(1, 2)
 
-        #Generator's pass & Discriminator's Loss
+         #Generator's pass & Discriminator's Loss
         if optimizer_idx==0:
+
+
+            #waveform len computation
+            #wav_lens = [w.shape[1] for w in batch["waveform"]]
+            #wav_lens = torch.LongTensor(wav_lens)
+            #wav_lens_max = torch.max(wav_lens)
+            #batch["waveform_rel_lens"] = wav_lens / wav_lens_max
+
+            #MEL TRANSFORMATION
+            #print("=> Format batch mel transformation")
+            #if self.args.encoder_sample_rate:
+            #    wav = self.audio_resampler(batch["waveform"])
+            #else:
+            #    wav = batch["waveform"]
+            # compute spectrograms    
+            #batch["spect"] = wav_to_spec(
+            #    wav,
+            #    self.config.audio.fft_size,
+            #    self.config.audio.hop_length,
+            #    self.config.audio.win_length,
+            #    center=False
+            #)
+            #if self.args.encoder_sample_rate:
+            #    # recompute spec with high sampling rate to the loss
+            #    spec_mel = wav_to_spec(
+            #        batch["waveform"], 
+            #        self.config.audio.fft_size,
+            #        self.config.audio.hop_length,
+            #        self.config.audio.win_length,
+            #        center=False
+            #    )
+            #    # remove extra stft frames if needed
+            #    if spec_mel.size(2) > int(batch["spect"].size(2) * self.interpolate_factor):
+            #        spec_mel = spec_mel[:, :, : int(batch["spect"].size(2) * self.interpolate_factor)]
+            #    else:
+            #        batch["spect"] = batch["spect"][:, :, : int(spec_mel.size(2) / self.interpolate_factor)]
+            #else:
+            #    spec_mel = batch["spect"]
+            #    
+            #batch["mel_transformed"] = spec_to_mel(
+            #    spec=spec_mel,
+            #    n_fft=self.config.audio.fft_size,
+            #    num_mels=self.config.audio.num_mels,
+            #    sample_rate=self.config.audio.sample_rate,
+            #    fmin=self.config.audio.mel_fmin,
+            #    fmax=self.config.audio.mel_fmax,
+            #)
+            #batch["mel_transformed_lens"] = (batch["mel_transformed"].shape[2] * batch["waveform_rel_lens"]).int()
+
+            # zero the padding frames
+            #batch["mel_transformed"] = batch["mel_transformed"] * sequence_mask(batch["mel_transformed_lens"]).unsqueeze(1)
+
+
+            # compute spectrogram frame lengths
+            #print("<= end transformation")
+
+
+
+
+            mel_input, mel_lengths=self.transform_batch(waveform)
             # forward pass
             outputs = self.forward(
                 x=text_input,
                 x_lengths=text_lengths,
                 waveform=waveform,
                 y_lengths=mel_lengths,
+                #y_lengths=batch["mel_transformed_lens"],
                 y=mel_input,
+                #y=batch["mel_transformed"],
                 pitch=pitch,
                 energy=energy,
                 aux_input=aux_input,
@@ -688,6 +921,9 @@ class JalfahTTS(BaseTTS):
         #Discriminator's pass & Generator's Loss
         if optimizer_idx==1:
 
+            #mel_input, mel_lengths=self.transform_batch(waveform)
+            #print("mel input in optimizer idx 1 :",str(mel_input.size()))
+
             # compute melspec segment
             with autocast(enabled=False):
                 if self.args.encoder_sample_rate:
@@ -696,8 +932,52 @@ class JalfahTTS(BaseTTS):
                     spec_segment_size = self.spec_segment_size
 
                 mel_slice = segment(
-                    mel_input.float(), self.model_outputs_cache["slice_ids"], spec_segment_size, pad_short=True
+                    mel_input.transpose(1,2).float(), self.model_outputs_cache["slice_ids"], spec_segment_size, pad_short=True
                 )
+                #print("mel_slice A : ",str(mel_slice.size()))
+
+                #alternative root for mel_slice
+                #if self.args.encoder_sample_rate:
+                #    wav = self.audio_resampler(batch["waveform"])
+                #else:
+                #    wav = batch["waveform"]
+                #batch["spec"] = wav_to_spec(
+                #    wav.transpose_(1, 2),
+                #    self.config.audio.fft_size,
+                #    self.config.audio.hop_length,
+                #    self.config.audio.win_length,
+                #    center=False
+                #)
+                #if self.args.encoder_sample_rate:
+                #    # recompute spec with high sampling rate to the loss
+                #    spec_mel = wav_to_spec(
+                #        batch["waveform"], 
+                #        self.config.audio.fft_size,
+                #        self.config.audio.hop_length,
+                #        self.config.audio.win_length,
+                #        center=False
+                #    )
+                #    # remove extra stft frames if needed
+                #    if spec_mel.size(2) > int(batch["spec"].size(2) * self.interpolate_factor):
+                #        spec_mel = spec_mel[:, :, : int(batch["spec"].size(2) * self.interpolate_factor)]
+                #    else:
+                #        batch["spec"] = batch["spec"][:, :, : int(spec_mel.size(2) / self.interpolate_factor)]
+                #else:
+                #    spec_mel = batch["spec"]
+                #batch["mel"] = spec_to_mel(
+                #    spec=spec_mel,
+                #    n_fft=self.config.audio.fft_size,
+                #    num_mels=self.config.audio.num_mels,
+                #    sample_rate=self.config.audio.sample_rate,
+                #    fmin=self.config.audio.mel_fmin,
+                #    fmax=self.config.audio.mel_fmax,
+                #)
+                #mel=batch["mel"]
+                #mel_slice = segment(
+                #        mel.float(), self.model_outputs_cache["slice_ids"], spec_segment_size, pad_short=True
+                #    )
+                #print("mel_slice B : ",str(mel_slice.size()))
+
                 mel_slice_hat = wav_to_mel(
                     y=self.model_outputs_cache["model_outputs"].float(),
                     n_fft=self.config.audio.fft_size,
@@ -709,6 +989,7 @@ class JalfahTTS(BaseTTS):
                     fmax=self.config.audio.mel_fmax,
                     center=False,
                 )
+                #print("mel_slice_hat : ",str(mel_slice_hat.size()))
 
 
             # compute discriminator scores and features
@@ -804,8 +1085,8 @@ class JalfahTTS(BaseTTS):
         logger.train_figures(steps, figures)
         logger.train_audios(steps, audios, self.ap.sample_rate)
 
-    def eval_step(self, batch: dict, criterion: nn.Module):
-        return self.train_step(batch, criterion)
+    def eval_step(self, batch: dict, criterion: nn.Module, optimizer_idx: int):
+        return self.train_step(batch, criterion,optimizer_idx)
 
     def eval_log(self, batch: dict, outputs: dict, logger: "Logger", assets: dict, steps: int) -> None:
         figures, audios = self._create_logs(batch, outputs, self.ap)
