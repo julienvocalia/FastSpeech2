@@ -718,23 +718,23 @@ class JalfahTTS(BaseTTS):
 
             # use aligner's output as the duration target
             if self.use_aligner:
-                durations = outputs["o_alignment_dur"]
+                durations = self.model_outputs_cache["o_alignment_dur"]
             # use float32 in AMP
             with autocast(enabled=False):
                 # compute loss
-                loss_dict = criterion(
+                loss_dict = criterion[optimizer_idx](
                     #removed since we do not use mel loss for mel decoder
                     #decoder_output=outputs["model_outputs"],
                     #decoder_target=mel_input,
                     #decoder_output_lens=mel_lengths,
-                    dur_output=outputs["durations_log"],
-                    dur_target=outputs["durations_mas_log"],
-                    pitch_output=outputs["pitch_avg"] if self.use_pitch else None,
-                    pitch_target=outputs["pitch_avg_gt"] if self.use_pitch else None,
-                    energy_output=outputs["energy_avg"] if self.use_energy else None,
-                    energy_target=outputs["energy_avg_gt"] if self.use_energy else None,
+                    dur_output=self.model_outputs_cache["durations_log"],
+                    dur_target=self.model_outputs_cache["durations_mas_log"],
+                    pitch_output=self.model_outputs_cache["pitch_avg"] if self.use_pitch else None,
+                    pitch_target=self.model_outputs_cache["pitch_avg_gt"] if self.use_pitch else None,
+                    energy_output=self.model_outputs_cache["energy_avg"] if self.use_energy else None,
+                    energy_target=self.model_outputs_cache["energy_avg_gt"] if self.use_energy else None,
                     input_lens=text_lengths,
-                    alignment_logprob=outputs["alignment_logprob"] if self.use_aligner else None,
+                    alignment_logprob=self.model_outputs_cache["alignment_logprob"] if self.use_aligner else None,
                     #addition for VITS
                     mel_lens_target=mel_lengths,
                     mel_slice=mel_slice.float(),
@@ -744,7 +744,7 @@ class JalfahTTS(BaseTTS):
                     scores_disc_fake = scores_disc_fake
                 )
                 # compute duration error
-                durations_pred = outputs["durations"]
+                durations_pred = self.model_outputs_cache["durations"]
                 duration_error = torch.abs(durations - durations_pred).sum() / text_lengths.sum()
                 loss_dict["duration_error"] = duration_error
 
