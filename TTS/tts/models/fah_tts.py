@@ -770,7 +770,7 @@ class FahTTS(BaseTTS):
         y_lengths: torch.LongTensor,
         waveform: torch.tensor, #for VITS
         y: torch.FloatTensor = None,
-        dr: torch.IntTensor = None,
+        #dr: torch.IntTensor = None,
         pitch: torch.FloatTensor = None,
         energy: torch.FloatTensor = None,
         aux_input: Dict = {"d_vectors": None, "speaker_ids": None},  # pylint: disable=unused-argument
@@ -1074,7 +1074,7 @@ class FahTTS(BaseTTS):
                 y_lengths=mel_lengths,
                 waveform=waveform.transpose_(1, 2),
                 y=mel_input,
-                dr=durations,
+                #dr=durations,
                 pitch=pitch,
                 energy=energy,
                 aux_input=aux_input,
