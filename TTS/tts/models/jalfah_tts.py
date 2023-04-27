@@ -168,9 +168,12 @@ def spec_to_mel(spec, n_fft, num_mels, sample_rate, fmin, fmax):
 
 @dataclass
 class JalfahTTSArgs(Coqpit):
+
+    #for wav generator only
+    hifigan_input: int = 80
+
     num_chars: int = None
-    out_channels: int = 256 #80
-    mdn_out_channels: int = 80*2
+    out_channels: int = 80
     hidden_channels: int = 256
     use_aligner: bool = True
     # pitch params
@@ -277,8 +280,7 @@ class JalfahTTS(BaseTTS):
 
         #from VITS
         self.waveform_decoder = HifiganGenerator(
-            self.args.hidden_channels,
-            #152,
+            self.args.hifigan_input,
             1,
             self.args.resblock_type_decoder,
             self.args.resblock_dilation_sizes_decoder,
@@ -328,8 +330,7 @@ class JalfahTTS(BaseTTS):
         if self.args.use_aligner:
             self.mdn_block = MDNBlock(
                 config.model_args.hidden_channels, 
-                #2 * config.model_args.out_channels
-                config.model_args.mdn_out_channels
+                2 * config.model_args.out_channels
             )
         
         #from VITS
@@ -813,8 +814,10 @@ class JalfahTTS(BaseTTS):
 
         # zero the padding frames
         mel= mel* sequence_mask(mel_lengths.to('cuda')).unsqueeze(1)
+        #mel= mel* sequence_mask(mel_lengths).unsqueeze(1)
 
         return mel.transpose_(1, 2).to('cuda'), mel_lengths.to('cuda')
+        #return mel.transpose_(1, 2), mel_lengths
 
     def train_step(self, batch: dict, criterion: nn.Module, optimizer_idx: int):
         text_input = batch["text_input"]
