@@ -717,18 +717,20 @@ class JalfahTTS(BaseTTS):
 
     @torch.no_grad()
     def inference(self, x, aux_input={"d_vectors": None, "speaker_ids": None}):  # pylint: disable=unused-argument
-        g = self._set_speaker_input(aux_input)
+        #we proper compute the embedding of g 
+        g=self._forward_speaker_embedding(aux_input)
+
         x_lengths = torch.tensor(x.shape[1:2]).to(x.device)
         x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.shape[1]), 1).to(x.dtype).float()
-        
+ 
         # encoder pass
-        o_en, _, x_mask,  _ = self._forward_encoder(x, x_mask, g)
-        
+        o_en, _, x_mask, _ = self._forward_encoder(x, x_mask, g)
+  
         # duration predictor pass
         o_dr_log = self.duration_predictor(o_en, x_mask)
         o_dr = self.format_durations(o_dr_log, x_mask).squeeze(1)
         y_lengths = o_dr.sum(1)
-        
+
         # pitch predictor pass
         o_pitch = None
         if self.args.use_pitch:
@@ -739,19 +741,16 @@ class JalfahTTS(BaseTTS):
         if self.args.use_energy:
             o_energy_emb, o_energy = self._forward_energy_predictor(o_en, x_mask)
 
-        # if pitch of energy was used, we add the results to o_en
+        #if pitch of energy was used, we add the results to o_en
         if self.args.use_pitch : o_en=o_en+o_pitch_emb
         if self.args.use_energy : o_en=o_en+o_energy_emb
-        
-        y_mask = sequence_mask(y_lengths, None).to(x_mask.dtype).unsqueeze(1)
+  
         # mel decoder pass
-        o_de, attn = self._forward_mel_decoder(o_en, o_dr, x_mask, y_lengths, g=None)
+        o_de, attn = self._forward_mel_decoder(o_en, o_dr, x_mask, y_lengths, g=g)
 
-        # upsampling if needed
-        z, _, _, y_mask = self.upsampling_z(o_de, y_lengths=y_lengths,y_mask=y_mask)
-
-        # waveform decoder pass
-        o_wav = self.waveform_decoder((z*y_mask)[:, :, : self.max_inference_len], g=g)
+        #wav decoder pass
+        o_wav = self.waveform_decoder(o_de, g=g)
+        #o_wav = self.waveform_decoder((z * y_mask)[:, :, : self.max_inference_len], g=g)
 
         outputs = {
             "model_outputs": o_wav,
@@ -759,7 +758,7 @@ class JalfahTTS(BaseTTS):
             "pitch": o_pitch,
             "energy": o_energy,
             "durations_log": o_dr_log,
-            "y_mask": y_mask,#from VITS
+            #"y_mask": y_mask,#from VITS
         }
         return outputs
 
