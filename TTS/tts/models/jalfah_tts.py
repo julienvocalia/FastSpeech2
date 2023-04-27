@@ -25,6 +25,8 @@ from librosa.filters import mel as librosa_mel_fn #from VITS
 from trainer.trainer_utils import get_optimizer, get_scheduler #from VITS
 from itertools import chain #from VITS
 import torchaudio #from VITS
+from TTS.vocoder.utils.generic_utils import plot_results #from VITS
+
 
 ##############################
 # IO / Feature extraction
@@ -719,7 +721,7 @@ class JalfahTTS(BaseTTS):
         x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.shape[1]), 1).to(x.dtype).float()
         
         # encoder pass
-        o_en, _, x_mask, g, _ = self._forward_encoder(x, x_mask, g)
+        o_en, _, x_mask,  _ = self._forward_encoder(x, x_mask, g)
         
         # duration predictor pass
         o_dr_log = self.duration_predictor(o_en, x_mask)
@@ -740,6 +742,7 @@ class JalfahTTS(BaseTTS):
         if self.args.use_pitch : o_en=o_en+o_pitch_emb
         if self.args.use_energy : o_en=o_en+o_energy_emb
         
+        y_mask = sequence_mask(y_lengths, None).to(x_mask.dtype).unsqueeze(1)
         # mel decoder pass
         o_de, attn = self._forward_mel_decoder(o_en, o_dr, x_mask, y_lengths, g=None)
 
