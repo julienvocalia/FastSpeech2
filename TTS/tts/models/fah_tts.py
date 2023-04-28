@@ -825,22 +825,15 @@ class FahTTS(BaseTTS):
         g=self._forward_speaker_embedding(aux_input)
         g=self._remove_inf(g)
 
-        print("--begin forward--")
-        print("g:",str(g.size()))
 
 
         # compute sequence masks
         y_mask = torch.unsqueeze(sequence_mask(y_lengths, None), 1).float()
         #y_mask=self._remove_inf(y_mask)
         x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.shape[1]), 1).float()
-        print("y_mask:",str(y_mask.size()))
-        print("x_mask:",str(x_mask.size()))
         #x_mask=self._remove_inf(x_mask)
         # encoder pass
         o_en,o_en_nospeaker, x_mask, _ = self._forward_encoder(x, x_mask, g)
-        print("o_en:",str(o_en.size()))
-        print("o_en_nospeaker:",str(o_en_nospeaker.size()))
-        print("x_mask:",str(x_mask.size()))
         #o_en=self._remove_inf(o_en)
         #o_en_nospeaker=self._remove_inf(o_en_nospeaker)
         #x_mask=self._remove_inf(x_mask)
@@ -849,21 +842,17 @@ class FahTTS(BaseTTS):
             o_dr_log = self.duration_predictor(o_en.detach(), x_mask)
         else:
             o_dr_log = self.duration_predictor(o_en, x_mask)
-        print("o_dr_log:",str(o_dr_log.size()))
         if torch.isnan(o_dr_log).any():
             print("o_dr_log is nan")
             o_dr_log=torch.nan_to_num(o_dr_log)
         #o_dr_log=self._remove_inf(o_dr_log)
         o_dr = torch.clamp(torch.exp(o_dr_log) - 1, 0, self.max_duration)
-        print("o_dr:",str(o_dr.size()))
         if torch.isnan(o_dr).any():
             print("o_dr is nan")
             o_dr=torch.nan_to_num(o_dr)
         #o_dr=self._remove_inf(o_dr)
         # generate attn mask from predicted durations
-        print("generate attention")
         o_attn = self.generate_attn(o_dr.squeeze(1), x_mask)
-        print("o_attn:",str(o_attn.size()))
         #o_attn=self._remove_inf(o_attn)
         # aligner
         o_alignment_dur = None
@@ -884,34 +873,24 @@ class FahTTS(BaseTTS):
             #alignment_soft = alignment_soft.transpose(1, 2)
             #alignment_mas = alignment_mas.transpose(1, 2)
             #dr = o_alignment_dur
-            print("dr_mas:",str(dr_mas.size()))
-            print("logp:",str(logp.size()))
-            print("dr_mas_log:",str(dr_mas_log.size()))
         # pitch predictor pass
         o_pitch = None
         avg_pitch = None
         if self.args.use_pitch:
             o_pitch_emb, o_pitch, avg_pitch = self._forward_pitch_predictor(o_en, x_mask, pitch, dr_mas)
             #o_en = o_en + o_pitch_emb
-            print("o_pitch_emb:",str(o_pitch_emb.size()))
-            print("o_pitch:",str(o_pitch.size()))
-            print("avg_pitch:",str(avg_pitch.size()))
         # energy predictor pass
         o_energy = None
         avg_energy = None
         if self.args.use_energy:
             o_energy_emb, o_energy, avg_energy = self._forward_energy_predictor(o_en, x_mask, energy, dr_mas)
             #o_en_var = o_en + o_energy_emb
-            print("o_energy_emb:",str(o_energy_emb.size()))
-            print("o_energy:",str(o_energy.size()))
-            print("avg_energy:",str(avg_energy.size()))
         #if pitch of energy was used, we add the results to o_en
         if self.args.use_pitch : o_en=o_en+o_pitch_emb
         if self.args.use_energy : o_en=o_en+o_energy_emb
 
         #we use here what was previously computed in _forward_decoder
         y_mask = torch.unsqueeze(sequence_mask(y_lengths, None), 1).to(o_en.dtype)
-        print("y_mask:",str(y_mask.size()))
         #y_mask=self._remove_inf(y_mask)
         # expand o_en with durations
         if torch.isnan(o_en).any():
@@ -938,7 +917,6 @@ class FahTTS(BaseTTS):
         # positional encoding
         if hasattr(self, "pos_encoder"):
             o_en_ex = self.pos_encoder(o_en_ex, y_mask)
-            print("o_en_ex:",str(o_en_ex.size()))
             if torch.isnan(o_en_ex).any():
                 print("nan in o_en_ex, after pos encoder  pass in forward")
                 o_en_ex=torch.nan_to_num(o_en_ex)
@@ -950,8 +928,7 @@ class FahTTS(BaseTTS):
             print("nan in z_slice, after rand_segment pass in forward")
             z_slice=torch.nan_to_num(z_slice)    
         #z_slice=self._remove_inf(z_slice)
-        print("z_slice:",str(z_slice.size()))
-        print("slice_ids:",str(slice_ids.size()))
+
         #wav decoder pass
         o_wav = self.waveform_decoder(z_slice, g=g)
         if torch.isnan(o_wav).any():
