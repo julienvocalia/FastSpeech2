@@ -808,7 +808,7 @@ class JalfahTTS(BaseTTS):
 
          #Generator's pass & Discriminator's Loss
         if optimizer_idx==0:
-            mel_input, mel_lengths=self.transform_batch(waveform)
+            #mel_input, mel_lengths=self.transform_batch(waveform)
 
             # forward pass
             outputs = self.forward(

@@ -29,7 +29,7 @@ class JalfahConfig(BaseTTSConfig):
     #generator Lr param
     lr_gen: float = 1e-5
     lr_scheduler_gen: str = "NoamLR"
-    lr_scheduler_gen_params: dict = field(default_factory=lambda: {"warmup_steps": 20}) 
+    lr_scheduler_gen_params: dict = field(default_factory=lambda: {"warmup_steps": 20}) #prev try with 150
 
     #discriminator Lr param
     lr_disc: float = 0.0002
