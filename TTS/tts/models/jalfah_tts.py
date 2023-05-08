@@ -435,7 +435,6 @@ class JalfahTTS(BaseTTS):
             - o_dr_log: :math:`(B, T_{de})`
             - x_mask: :math:`(B, T_{en})`
         """
-        o_dr = (torch.exp(o_dr_log) - 1) * x_mask * self.length_scale
         #o_dr = (torch.exp(o_dr_log) - 1) * x_mask * self.length_scale
         o_dr = (torch.exp(o_dr_log)) * x_mask * self.length_scale
         o_dr[o_dr < 1] = 1.0
