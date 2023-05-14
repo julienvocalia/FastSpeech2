@@ -27,7 +27,7 @@ class JalfahConfig(BaseTTSConfig):
     grad_clip: List[float] = field(default_factory=lambda: [1000, 5.0])
 
     #generator Lr param
-    lr_gen: float = 1e-5
+    lr_gen: float = 1e-5 * 2 #we double it
     lr_scheduler_gen: str = "NoamLR"
     lr_scheduler_gen_params: dict = field(default_factory=lambda: {"warmup_steps": 20}) #prev try with 150
 
@@ -45,9 +45,9 @@ class JalfahConfig(BaseTTSConfig):
     dur_loss_alpha: float = 2.0
     use_mdn_loss: bool = True
     mdn_loss_alpha: float = 2.0
-    gen_loss_alpha: float = 0.5
-    feat_loss_alpha: float = 0.5
-    mel_loss_alpha: float = 15.0
+    gen_loss_alpha: float = 1.0 #0.5
+    feat_loss_alpha: float = 1.0 #0.5
+    mel_loss_alpha: float = 45.0 #15.0
     disc_loss_alpha: float = 1.0
 
     #VITS dataset config
