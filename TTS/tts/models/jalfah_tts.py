@@ -439,6 +439,7 @@ class JalfahTTS(BaseTTS):
         o_dr = (torch.exp(o_dr_log)) * x_mask * self.length_scale
         o_dr[o_dr < 1] = 1.0
         o_dr = torch.round(o_dr)
+        #o_dr=torch.ceil(o_dr)
         return o_dr
 
     def _forward_encoder(
@@ -627,8 +628,8 @@ class JalfahTTS(BaseTTS):
         else:
             o_dr_log = self.duration_predictor(o_en, x_mask)
 
-        #o_dr = torch.clamp(torch.exp(o_dr_log) - 1, 0, self.max_duration)
-        o_dr = torch.clamp(torch.exp(o_dr_log), 0, self.max_duration)
+        o_dr = torch.clamp(torch.exp(o_dr_log) - 1, 0, self.max_duration)
+        #o_dr = torch.clamp(torch.exp(o_dr_log), 0, self.max_duration)
 
         # generate attn mask from predicted durations
 
