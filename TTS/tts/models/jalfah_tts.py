@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from socket import send_fds
 from typing import Dict, List, Tuple, Union
 
 import torch
@@ -340,6 +341,26 @@ class JalfahTTS(BaseTTS):
         #from VITS
         self.spec_segment_size=self.args.spec_segment_size
 
+
+        #Freeze embedding, encoder, and duration predictor
+        modules=[
+            self.emb,
+            self.encoder,
+            self.pos_encoder,
+            #self.mel_decoder,
+            #self.waveform_decoder,
+            self.duration_predictor,
+            self.pitch_predictor,
+            self.pitch_emb,
+            self.energy_predictor,
+            self.energy_emb,
+            #self.mdn_block,
+            #self.disc,
+        ]
+        for module in modules:
+            for param in module.parameters():
+                    param.requires_grad = False
+
     def init_multispeaker(self, config: Coqpit):
         """Init for multi-speaker training.
 
@@ -365,6 +386,9 @@ class JalfahTTS(BaseTTS):
             print(" > Init speaker_embedding layer.")
             self.emb_g = nn.Embedding(self.num_speakers, self.args.hidden_channels)
             nn.init.uniform_(self.emb_g.weight, -0.1, 0.1)
+            #UPDATE ICI
+            for param in self.emb_g.parameters():
+                    param.requires_grad = False
 
     def init_upsampling(self):
         """
@@ -630,6 +654,7 @@ class JalfahTTS(BaseTTS):
 
         o_dr = torch.clamp(torch.exp(o_dr_log) - 1, 0, self.max_duration)
         #o_dr = torch.clamp(torch.exp(o_dr_log), 0, self.max_duration)
+        #o_dr = self.format_durations(o_dr_log, x_mask)
 
         # generate attn mask from predicted durations
 

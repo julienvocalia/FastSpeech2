@@ -1139,12 +1139,12 @@ class JalfahTTSLoss(nn.Module):
 
         if hasattr(self, "pitch_loss") and self.pitch_loss_alpha > 0:
             pitch_loss = self.pitch_loss(pitch_output.transpose(1, 2), pitch_target.transpose(1, 2), input_lens)
-            loss = loss + self.pitch_loss_alpha * pitch_loss
+            #loss = loss + self.pitch_loss_alpha * pitch_loss
             return_dict["loss_pitch"] = self.pitch_loss_alpha * pitch_loss
 
         if hasattr(self, "energy_loss") and self.energy_loss_alpha > 0:
             energy_loss = self.energy_loss(energy_output.transpose(1, 2), energy_target.transpose(1, 2), input_lens)
-            loss = loss + self.energy_loss_alpha * energy_loss
+            #loss = loss + self.energy_loss_alpha * energy_loss
             return_dict["loss_energy"] = self.energy_loss_alpha * energy_loss
 
         if hasattr(self, "mdn_loss") and self.mdn_loss_alpha > 0:
@@ -1154,7 +1154,7 @@ class JalfahTTSLoss(nn.Module):
 
         if hasattr(self, "dur_loss") and self.dur_loss_alpha > 0:
             dur_loss = self.dur_loss(dur_output.unsqueeze(2), dur_target.unsqueeze(2), input_lens)
-            loss = loss + self.dur_loss_alpha * dur_loss
+            #loss = loss + self.dur_loss_alpha * dur_loss
             return_dict["loss_dur"] = self.dur_loss_alpha * dur_loss
         
         #VITS losses
