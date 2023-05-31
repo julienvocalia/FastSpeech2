@@ -1164,7 +1164,7 @@ class JalfahTTSLoss(nn.Module):
         return_dict["loss_gen"]=loss_gen
         loss_mel = torch.nn.functional.l1_loss(mel_slice, mel_slice_hat) * self.mel_loss_alpha
         return_dict["loss_mel"]=loss_mel
-        loss=loss + loss_feat + loss_gen + loss_mel
+        #loss=loss + loss_feat + loss_gen + loss_mel
 
         return_dict["loss"] = loss
         return return_dict

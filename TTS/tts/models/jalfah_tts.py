@@ -331,6 +331,12 @@ class JalfahTTS(BaseTTS):
                 2 * config.model_args.out_channels
             )
         
+        if self.args.use_aligner:
+            self.mdn_block_retrain = MDNBlock(
+                config.model_args.hidden_channels, 
+                2 * config.model_args.out_channels
+            )
+        
         #from VITS
         if self.args.init_discriminator:
             self.disc = VitsDiscriminator(
@@ -347,15 +353,16 @@ class JalfahTTS(BaseTTS):
             self.emb,
             self.encoder,
             self.pos_encoder,
-            #self.mel_decoder,
-            #self.waveform_decoder,
+            self.mel_decoder,
+            self.waveform_decoder,
             self.duration_predictor,
             self.pitch_predictor,
             self.pitch_emb,
             self.energy_predictor,
             self.energy_emb,
-            #self.mdn_block,
-            #self.disc,
+            self.mdn_block,
+            #self.mdn_block_retrain,
+            self.disc,
         ]
         for module in modules:
             for param in module.parameters():
@@ -556,7 +563,7 @@ class JalfahTTS(BaseTTS):
 
     def _forward_mdn(self, o_en, y, y_lengths, x_mask):
         # MAS potentials and alignment
-        mu, log_sigma = self.mdn_block(o_en)
+        mu, log_sigma = self.mdn_block_retrain(o_en)
         y_mask = torch.unsqueeze(sequence_mask(y_lengths, None), 1).to(o_en.dtype)
         dr_mas, logp = self.compute_align_path(mu, log_sigma, y, x_mask, y_mask)
         return dr_mas, mu, log_sigma, logp
@@ -834,6 +841,97 @@ class JalfahTTS(BaseTTS):
         #addition for VITS
         waveform=batch["waveform"].transpose_(1, 2)
 
+
+        # forward pass
+        outputs = self.forward(
+            x=text_input,
+            x_lengths=text_lengths,
+            waveform=waveform,
+            y_lengths=mel_lengths,
+            #y_lengths=batch["mel_transformed_lens"],
+            y=mel_input,
+            #y=batch["mel_transformed"],
+            pitch=pitch,
+            energy=energy,
+            aux_input=aux_input,
+        )
+        # cache tensors for the generator pass
+        self.model_outputs_cache = outputs  # pylint: disable=attribute-defined-outside-init
+
+
+        # compute melspec segment
+        with autocast(enabled=False):
+            if self.args.encoder_sample_rate:
+                spec_segment_size = self.spec_segment_size * int(self.interpolate_factor)
+            else:
+                spec_segment_size = self.spec_segment_size
+
+            mel_slice = segment(
+                mel_input.transpose(1,2).float(), self.model_outputs_cache["slice_ids"], spec_segment_size, pad_short=True
+            )
+
+            mel_slice_hat = wav_to_mel(
+                y=self.model_outputs_cache["model_outputs"].float(),
+                n_fft=self.config.audio.fft_size,
+                sample_rate=self.config.audio.sample_rate,
+                num_mels=self.config.audio.num_mels,
+                hop_length=self.config.audio.hop_length,
+                win_length=self.config.audio.win_length,
+                fmin=self.config.audio.mel_fmin,
+                fmax=self.config.audio.mel_fmax,
+                center=False,
+            )
+
+        # compute discriminator scores and features
+        scores_disc_fake, feats_disc_fake, _, feats_disc_real = self.disc(
+            self.model_outputs_cache["model_outputs"], self.model_outputs_cache["waveform_seg"]
+        )
+
+        # use aligner's output as the duration target
+        if self.use_aligner:
+            durations = self.model_outputs_cache["o_alignment_dur"]
+        # use float32 in AMP
+        with autocast(enabled=False):
+            # compute loss
+            loss_dict = criterion[0](
+                dur_output=self.model_outputs_cache["durations_log"],
+                dur_target=self.model_outputs_cache["durations_mas_log"],
+                pitch_output=self.model_outputs_cache["pitch_avg"] if self.use_pitch else None,
+                pitch_target=self.model_outputs_cache["pitch_avg_gt"] if self.use_pitch else None,
+                energy_output=self.model_outputs_cache["energy_avg"] if self.use_energy else None,
+                energy_target=self.model_outputs_cache["energy_avg_gt"] if self.use_energy else None,
+                input_lens=text_lengths,
+                alignment_logprob=self.model_outputs_cache["alignment_logprob"] if self.use_aligner else None,
+                #addition for VITS
+                mel_lens_target=mel_lengths,
+                mel_slice=mel_slice.float(),
+                mel_slice_hat=mel_slice_hat.float(),
+                feats_disc_real=feats_disc_real,
+                feats_disc_fake = feats_disc_fake,
+                scores_disc_fake = scores_disc_fake
+            )
+            # compute duration error
+            durations_pred = self.model_outputs_cache["durations"]
+            duration_error = torch.abs(durations - durations_pred).sum() / text_lengths.sum()
+            loss_dict["duration_error"] = duration_error
+            
+        return self.model_outputs_cache, loss_dict
+
+
+    def train_step_old(self, batch: dict, criterion: nn.Module, optimizer_idx: int):
+        text_input = batch["text_input"]
+        text_lengths = batch["text_lengths"]
+        mel_input = batch["mel_input"]
+        mel_lengths = batch["mel_lengths"]
+        pitch = batch["pitch"] if self.args.use_pitch else None
+        energy = batch["energy"] if self.args.use_energy else None
+        d_vectors = batch["d_vectors"]
+        speaker_ids = batch["speaker_ids"]
+        durations = batch["durations"]
+        aux_input = {"d_vectors": d_vectors, "speaker_ids": speaker_ids}
+        #addition for VITS
+        waveform=batch["waveform"].transpose_(1, 2)
+
          #Generator's pass & Discriminator's Loss
         if optimizer_idx==0:
             #mel_input, mel_lengths=self.transform_batch(waveform)
@@ -930,13 +1028,13 @@ class JalfahTTS(BaseTTS):
 
     def _create_logs(self, batch, outputs, ap):
         #adding VITS logs
-        y_hat = outputs[1]["model_outputs"]
-        y = outputs[1]["waveform_seg"]
+        y_hat = outputs[0]["model_outputs"]
+        y = outputs[0]["waveform_seg"]
         figures = plot_results(y_hat, y, ap)
         sample_voice = y_hat[0].squeeze(0).detach().cpu().numpy()
         #train_audio = {"audio": sample_voice}
 
-        alignments = outputs[1]["alignments"]
+        alignments = outputs[0]["alignments"]
         align_img = alignments[0].data.cpu().numpy().T
         figures.update(
             {
@@ -946,8 +1044,8 @@ class JalfahTTS(BaseTTS):
 
         # plot pitch figures
         if self.args.use_pitch:
-            pitch_avg = abs(outputs[1]["pitch_avg_gt"][0, 0].data.cpu().numpy())
-            pitch_avg_hat = abs(outputs[1]["pitch_avg"][0, 0].data.cpu().numpy())
+            pitch_avg = abs(outputs[0]["pitch_avg_gt"][0, 0].data.cpu().numpy())
+            pitch_avg_hat = abs(outputs[0]["pitch_avg"][0, 0].data.cpu().numpy())
             chars = self.tokenizer.decode(batch["text_input"][0].data.cpu().numpy())
             pitch_figures = {
                 "pitch_ground_truth": plot_avg_pitch(pitch_avg, chars, output_fig=False),
@@ -957,8 +1055,8 @@ class JalfahTTS(BaseTTS):
 
         # plot energy figures
         if self.args.use_energy:
-            energy_avg = abs(outputs[1]["energy_avg_gt"][0, 0].data.cpu().numpy())
-            energy_avg_hat = abs(outputs[1]["energy_avg"][0, 0].data.cpu().numpy())
+            energy_avg = abs(outputs[0]["energy_avg_gt"][0, 0].data.cpu().numpy())
+            energy_avg_hat = abs(outputs[0]["energy_avg"][0, 0].data.cpu().numpy())
             chars = self.tokenizer.decode(batch["text_input"][0].data.cpu().numpy())
             energy_figures = {
                 "energy_ground_truth": plot_avg_energy(energy_avg, chars, output_fig=False),
@@ -1002,11 +1100,15 @@ class JalfahTTS(BaseTTS):
             VitsDiscriminatorLoss,
             JalfahTTSLoss
         )
-        return [VitsDiscriminatorLoss(self.config),JalfahTTSLoss(self.config)]
+        return [
+            #VitsDiscriminatorLoss(self.config),
+            JalfahTTSLoss(self.config)]
     
     #from VITS
     def get_lr(self) -> List:
-        return [self.config.lr_disc, self.config.lr_gen]
+        return [
+            #self.config.lr_disc, 
+            self.config.lr_gen]
     
     #from VITS
     def get_optimizer(self) -> List:
@@ -1018,13 +1120,17 @@ class JalfahTTS(BaseTTS):
             self.config.optimizer, self.config.optimizer_params, self.config.lr_gen, parameters=gen_parameters
         )
 
-        return [optimizer0, optimizer1]
+        return [
+            #optimizer0, 
+            optimizer1]
 
     #from VITS
     def get_scheduler(self, optimizer) -> List:
-        scheduler_D = get_scheduler(self.config.lr_scheduler_disc, self.config.lr_scheduler_disc_params, optimizer[0])
-        scheduler_G = get_scheduler(self.config.lr_scheduler_gen, self.config.lr_scheduler_gen_params, optimizer[1])
-        return [scheduler_D, scheduler_G]
+        #scheduler_D = get_scheduler(self.config.lr_scheduler_disc, self.config.lr_scheduler_disc_params, optimizer[0])
+        scheduler_G = get_scheduler(self.config.lr_scheduler_gen, self.config.lr_scheduler_gen_params, optimizer[0])
+        return [
+            #scheduler_D, 
+            scheduler_G]
 
     @staticmethod
     def init_from_config(config: "JalfahConfig", samples: Union[List[List], List[Dict]] = None):

@@ -30,7 +30,7 @@ class JalfahConfig(BaseTTSConfig):
     #lr_gen: float = 1e-5 * 2 #1e-5
     #lr_scheduler_gen: str = "NoamLR"
     #lr_scheduler_gen_params: dict = field(default_factory=lambda: {"warmup_steps": 20}) #prev try with 150
-    lr_gen: float = 2e-6 #temp to continue previous jalfah minidata training
+    lr_gen: float = 5e-6 #temp to continue previous jalfah minidata training
     lr_scheduler_gen: str = None #temp to continue previous jalfah minidata training
     lr_scheduler_gen_params: dict = None #temp to continue previous jalfah minidata training
 
